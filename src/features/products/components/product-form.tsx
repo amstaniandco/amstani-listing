@@ -1,604 +1,540 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { z } from "zod";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useFieldArray, useForm } from "react-hook-form";
-import { Eye, EyeOff, Plus, Trash2, Upload } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, Plus, Trash2, Upload } from "lucide-react";
+import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { usePortalStore } from "@/store/portal-store";
-import type { PortalCategory, PortalProduct, ProductVariant, SizeChartRow, StoreOption } from "@/types/portal";
 
-const productSchema = z.object({
-  title: z.string().min(3, "Product title is required."),
-  shortDescription: z.string().optional(),
-  description: z.string().min(10, "Add a meaningful description."),
-  material: z.string().optional(),
-  sku: z.string().min(2, "SKU is required."),
-  brandId: z.string().optional(),
-  categoryIds: z.array(z.string()).min(1, "Choose at least one category."),
-  images: z.array(z.string()).default([]),
-  price: z.coerce.number().min(0),
-  compareAtPrice: z.coerce.number().optional(),
-  costPrice: z.coerce.number().optional(),
-  totalStock: z.coerce.number().min(0),
-  stockStatus: z.enum(["in-stock", "low-stock", "out-of-stock"]),
-  featured: z.boolean().default(false),
-  published: z.boolean().default(true),
-  variants: z.array(z.object({
-    sizeType: z.string(),
-    size: z.string(),
-    color: z.string().optional(),
-    stock: z.coerce.number().min(0),
-    skuVariant: z.string(),
-  })).default([]),
-  sizeCharts: z.array(z.object({
-    size: z.string(),
-    height: z.string().optional(),
-    width: z.string().optional(),
-    length: z.string().optional(),
-    unit: z.string().default("cm"),
-  })).default([]),
-  weight: z.coerce.number().optional(),
-  shippingClass: z.string().optional(),
-  length: z.coerce.number().optional(),
-  width: z.coerce.number().optional(),
-  height: z.coerce.number().optional(),
-  seoTitle: z.string().optional(),
-  seoDescription: z.string().optional(),
-  storeId: z.string().optional(),
-});
+export interface CategoryOption {
+  id: string;
+  name: string;
+}
 
-type ProductValues = z.infer<typeof productSchema>;
+interface SizeVariable {
+  name: string;
+  label: string;
+}
+interface VariantRow {
+  size: string;
+  color: string;
+  stockQuantity: string;
+  skuVariant: string;
+}
+interface SizeChartRow {
+  size: string;
+  unit: "cm" | "in";
+  measurements: Record<string, string>;
+}
+
+const SIZE_OPTIONS = ["XS", "S", "M", "L", "XL", "XXL", "Custom"];
+
+export interface EditProduct {
+  id: string;
+  name: string;
+  sku: string;
+  shortDescription: string;
+  fullDescription: string;
+  price: number;
+  compareAtPrice: number | null;
+  costPrice: number | null;
+  stockStatus: "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK";
+  totalStock: number;
+  isFeatured: boolean;
+  isPublished: boolean;
+  seoTitle: string | null;
+  seoDescription: string | null;
+  categoryIds: string[];
+  images: string[];
+  variants: { size: string; color: string; stockQuantity: number; skuVariant: string }[];
+  sizeCharts: { size: string; unit: "cm" | "in"; measurements: Record<string, string> }[];
+  shipping: {
+    weight: number | null; dimensionL: number | null; dimensionW: number | null;
+    dimensionH: number | null; shippingClass: string | null;
+  };
+}
 
 interface ProductFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  brandId: string;
   brandName: string;
-  categories: PortalCategory[];
-  stores: StoreOption[];
-  product?: PortalProduct | null;
+  categories: CategoryOption[];
+  product?: EditProduct | null; // present => edit mode
+  onSaved: () => void;
 }
 
-const emptyVariant: ProductVariant = {
-  sizeType: "Preset (S, M, L...)",
-  size: "",
-  color: "",
-  stock: 0,
-  skuVariant: "",
-};
-
-const emptySizeChart: SizeChartRow = {
-  size: "",
-  height: "",
-  width: "",
-  length: "",
-  unit: "cm",
-};
-
-const sizeVariables = [
-  { id: "height", label: "Height (height)" },
-  { id: "width", label: "Width (width)" },
-  { id: "length", label: "Length (length)" },
-];
-
-function ProductForm({ open, onOpenChange, brandId, brandName, categories, stores, product }: ProductFormProps) {
-  const createProduct = usePortalStore((state) => state.createProduct);
-  const updateProduct = usePortalStore((state) => state.updateProduct);
-  const [images, setImages] = useState<string[]>(product?.images ?? []);
-  const [showSizeVariables, setShowSizeVariables] = useState(false);
-  const form = useForm<ProductValues>({
-    resolver: zodResolver(productSchema),
-    defaultValues: {
-      title: product?.title ?? "",
-      shortDescription: product?.description?.substring(0, 50) ?? "",
-      description: product?.description ?? "",
-      material: product?.material ?? "",
-      sku: product?.sku ?? "",
-      brandId: brandId,
-      categoryIds: product?.categoryIds ?? [],
-      images: product?.images ?? [],
-      price: product?.price ?? 0,
-      compareAtPrice: product?.compareAtPrice,
-      costPrice: product?.costPrice,
-      totalStock: product?.totalStock ?? 0,
-      stockStatus: product?.stockStatus ?? "in-stock",
-      featured: product?.featured ?? false,
-      published: product?.published ?? true,
-      variants: product?.variants?.length ? product.variants : [emptyVariant],
-      sizeCharts: product?.sizeCharts?.length ? product.sizeCharts : [],
-      weight: product?.weight,
-      shippingClass: product?.shippingClass ?? "Standard",
-      length: product?.length,
-      width: product?.width,
-      height: product?.height,
-      seoTitle: product?.seoTitle ?? "",
-      seoDescription: product?.seoDescription ?? "",
-      storeId: product?.storeId,
-    },
-  });
-
-  const variants = useFieldArray({ control: form.control, name: "variants" });
-  const sizeCharts = useFieldArray({ control: form.control, name: "sizeCharts" });
-
-  useEffect(() => {
-    form.reset({
-      title: product?.title ?? "",
-      shortDescription: product?.description?.substring(0, 50) ?? "",
-      description: product?.description ?? "",
-      material: product?.material ?? "",
-      sku: product?.sku ?? "",
-      brandId: brandId,
-      categoryIds: product?.categoryIds ?? [],
-      images: product?.images ?? [],
-      price: product?.price ?? 0,
-      compareAtPrice: product?.compareAtPrice,
-      costPrice: product?.costPrice,
-      totalStock: product?.totalStock ?? 0,
-      stockStatus: product?.stockStatus ?? "in-stock",
-      featured: product?.featured ?? false,
-      published: product?.published ?? true,
-      variants: product?.variants?.length ? product.variants : [emptyVariant],
-      sizeCharts: product?.sizeCharts?.length ? product.sizeCharts : [],
-      weight: product?.weight,
-      shippingClass: product?.shippingClass ?? "Standard",
-      length: product?.length,
-      width: product?.width,
-      height: product?.height,
-      seoTitle: product?.seoTitle ?? "",
-      seoDescription: product?.seoDescription ?? "",
-      storeId: product?.storeId,
-    });
-    setImages(product?.images ?? []);
-  }, [form, product]);
-
-  const selectedCategories = useMemo(
-    () => categories.filter((cat) => form.watch("categoryIds").includes(cat.id)),
-    [categories, form],
+export function ProductForm({ open, onOpenChange, categories, product, onSaved }: ProductFormProps) {
+  const isEdit = Boolean(product);
+  // Basic
+  const [name, setName] = useState(product?.name ?? "");
+  const [sku, setSku] = useState(product?.sku ?? "");
+  const [categoryIds, setCategoryIds] = useState<string[]>(product?.categoryIds ?? []);
+  const [shortDescription, setShortDescription] = useState(product?.shortDescription ?? "");
+  const [fullDescription, setFullDescription] = useState(product?.fullDescription ?? "");
+  // Pricing & inventory (price is read-only in edit mode)
+  const [price, setPrice] = useState(product ? String(product.price) : "");
+  const [compareAtPrice, setCompareAtPrice] = useState(product?.compareAtPrice != null ? String(product.compareAtPrice) : "");
+  const [costPrice, setCostPrice] = useState(product?.costPrice != null ? String(product.costPrice) : "");
+  const [stockStatus, setStockStatus] = useState<"IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK">(product?.stockStatus ?? "IN_STOCK");
+  const [totalStock, setTotalStock] = useState(product ? String(product.totalStock) : "");
+  const [isFeatured, setIsFeatured] = useState(product?.isFeatured ?? false);
+  const [isPublished, setIsPublished] = useState(product?.isPublished ?? true);
+  // Variants
+  const [variants, setVariants] = useState<VariantRow[]>(
+    product?.variants.length
+      ? product.variants.map((v) => ({ size: v.size, color: v.color, stockQuantity: String(v.stockQuantity), skuVariant: v.skuVariant }))
+      : [{ size: "M", color: "", stockQuantity: "0", skuVariant: "" }],
   );
-
-  const onUploadImages = (files: FileList | null) => {
-    if (!files?.length) return;
-    const nextImages = [...images, ...Array.from(files).map((file) => URL.createObjectURL(file))];
-    setImages(nextImages);
-    form.setValue("images", nextImages);
-  };
-
-  const onSubmit = form.handleSubmit((values) => {
-    const payload = {
-      id: product?.id ?? "",
-      brandId,
-      brandName,
-      ...values,
-      images,
-      createdAt: product?.createdAt ?? new Date().toISOString(),
-    } as PortalProduct;
-
-    if (product) {
-      updateProduct(product.id, payload);
-    } else {
-      createProduct(payload);
-    }
-
-    onOpenChange(false);
+  // Size chart
+  const [showVariables, setShowVariables] = useState(false);
+  const [sizeVariables, setSizeVariables] = useState<SizeVariable[]>(() => {
+    if (!product?.sizeCharts.length) return [];
+    const names = new Set<string>();
+    product.sizeCharts.forEach((r) => Object.keys(r.measurements).forEach((k) => names.add(k)));
+    return [...names].map((n) => ({ name: n, label: n.charAt(0).toUpperCase() + n.slice(1) }));
   });
+  const [newVarName, setNewVarName] = useState("");
+  const [newVarLabel, setNewVarLabel] = useState("");
+  const [sizeChart, setSizeChart] = useState<SizeChartRow[]>(
+    product?.sizeCharts.map((r) => ({ size: r.size, unit: r.unit, measurements: { ...r.measurements } })) ?? [],
+  );
+  // Images
+  const [images, setImages] = useState<string[]>(product?.images ?? []);
+  const [uploading, setUploading] = useState(false);
+  // Shipping
+  const [weight, setWeight] = useState(product?.shipping.weight != null ? String(product.shipping.weight) : "");
+  const [shippingClass, setShippingClass] = useState(product?.shipping.shippingClass ?? "");
+  const [dimL, setDimL] = useState(product?.shipping.dimensionL != null ? String(product.shipping.dimensionL) : "");
+  const [dimW, setDimW] = useState(product?.shipping.dimensionW != null ? String(product.shipping.dimensionW) : "");
+  const [dimH, setDimH] = useState(product?.shipping.dimensionH != null ? String(product.shipping.dimensionH) : "");
+  // SEO
+  const [seoTitle, setSeoTitle] = useState(product?.seoTitle ?? "");
+  const [seoDescription, setSeoDescription] = useState(product?.seoDescription ?? "");
+
+  const [submitting, setSubmitting] = useState(false);
+  // In edit mode we already seeded size variables from the product; skip the
+  // first auto-load so we don't clobber them. Subsequent category changes still
+  // refresh the variables.
+  const skipInitialVarLoad = useRef(isEdit);
+
+  // Load default size variables when the selected categories change. The fetch
+  // is async, so the setState happens in a callback (not synchronously in the
+  // effect body) — which satisfies the React Compiler.
+  useEffect(() => {
+    if (skipInitialVarLoad.current) {
+      skipInitialVarLoad.current = false;
+      return;
+    }
+    let active = true;
+    (async () => {
+      if (!categoryIds.length) {
+        if (active) setSizeVariables([]);
+        return;
+      }
+      const res = await fetch(`/api/categories/size-variables?ids=${categoryIds.join(",")}`);
+      const data = await res.json();
+      if (active && data.ok) {
+        const vars: SizeVariable[] = data.variables.map((v: SizeVariable) => ({ name: v.name, label: v.label }));
+        setSizeVariables(vars.length ? vars : [
+          { name: "height", label: "Height" },
+          { name: "width", label: "Width" },
+          { name: "length", label: "Length" },
+        ]);
+      }
+    })();
+    return () => { active = false; };
+  }, [categoryIds]);
+
+  const variableNames = useMemo(() => sizeVariables.map((v) => v.name), [sizeVariables]);
+
+  function toggleCategory(id: string, checked: boolean) {
+    setCategoryIds((prev) => (checked ? [...prev, id] : prev.filter((c) => c !== id)));
+  }
+
+  // ---- variants
+  function addVariant() {
+    setVariants((v) => [...v, { size: "M", color: "", stockQuantity: "0", skuVariant: "" }]);
+  }
+  function updateVariant(i: number, patch: Partial<VariantRow>) {
+    setVariants((v) => v.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+  }
+  function removeVariant(i: number) {
+    setVariants((v) => v.filter((_, idx) => idx !== i));
+  }
+
+  // ---- size variables
+  function addVariable() {
+    const n = newVarName.trim().toLowerCase().replace(/\s+/g, "_");
+    if (!n) return;
+    if (sizeVariables.some((v) => v.name === n)) { toast.error("Variable already exists."); return; }
+    setSizeVariables((vs) => [...vs, { name: n, label: newVarLabel.trim() || newVarName.trim() }]);
+    setNewVarName(""); setNewVarLabel("");
+  }
+  function removeVariable(name: string) {
+    setSizeVariables((vs) => vs.filter((v) => v.name !== name));
+    setSizeChart((rows) => rows.map((r) => {
+      const m = { ...r.measurements }; delete m[name]; return { ...r, measurements: m };
+    }));
+  }
+
+  // ---- size chart rows
+  function addSizeRow() {
+    setSizeChart((rows) => [...rows, { size: "M", unit: "cm", measurements: {} }]);
+  }
+  function updateSizeRow(i: number, patch: Partial<SizeChartRow>) {
+    setSizeChart((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  function updateMeasurement(i: number, varName: string, value: string) {
+    setSizeChart((rows) => rows.map((r, idx) => (idx === i ? { ...r, measurements: { ...r.measurements, [varName]: value } } : r)));
+  }
+  function removeSizeRow(i: number) {
+    setSizeChart((rows) => rows.filter((_, idx) => idx !== i));
+  }
+
+  // ---- images upload to bucket
+  async function onUpload(files: FileList | null) {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/products/upload", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok || !data.ok) { toast.error(data.message ?? "Upload failed."); continue; }
+        setImages((prev) => [...prev, data.url]);
+      }
+    } finally {
+      setUploading(false);
+    }
+  }
+  function removeImage(url: string) {
+    setImages((prev) => prev.filter((u) => u !== url));
+  }
+
+  function validate(): string | null {
+    if (name.trim().length < 3) return "Product name is required.";
+    if (sku.trim().length < 2) return "SKU is required.";
+    if (!categoryIds.length) return "Select at least one category.";
+    if (fullDescription.trim().length < 10) return "Full description is required.";
+    if (!isEdit && (!price || Number(price) < 0)) return "Valid price is required.";
+    if (totalStock === "" || Number(totalStock) < 0) return "Total stock is required.";
+    if (!images.length) return "Upload at least one image.";
+    if (!variants.length) return "Add at least one variant.";
+    for (const v of variants) {
+      if (!v.size || !v.color.trim() || !v.skuVariant.trim()) return "Each variant needs size, color, and SKU.";
+    }
+    if (!sizeChart.length) return "Add at least one size chart row.";
+    if (!weight || Number(weight) < 0) return "Weight is required.";
+    if (!shippingClass.trim()) return "Shipping class is required.";
+    if (!dimL || !dimW || !dimH) return "Dimensions (L × W × H) are required.";
+    if (!seoTitle.trim()) return "SEO title is required.";
+    if (!seoDescription.trim()) return "SEO description is required.";
+    return null;
+  }
+
+  async function onSubmit() {
+    const err = validate();
+    if (err) { toast.error(err); return; }
+    setSubmitting(true);
+    try {
+      const payload = {
+        name, sku, shortDescription: shortDescription || fullDescription.slice(0, 160), fullDescription,
+        categoryIds, price: Number(price),
+        compareAtPrice: compareAtPrice ? Number(compareAtPrice) : null,
+        costPrice: costPrice ? Number(costPrice) : null,
+        stockStatus, totalStock: Number(totalStock), isFeatured, isPublished,
+        seoTitle, seoDescription, images,
+        variants: variants.map((v) => ({
+          size: v.size, color: v.color, stockQuantity: Number(v.stockQuantity || 0), skuVariant: v.skuVariant,
+          isCustomSize: v.size === "Custom",
+        })),
+        sizeCharts: sizeChart.map((r) => ({
+          size: r.size, unit: r.unit,
+          measurements: Object.fromEntries(variableNames.map((n) => [n, r.measurements[n] ?? ""])),
+        })),
+        shipping: {
+          weight: Number(weight), dimensionL: Number(dimL), dimensionW: Number(dimW),
+          dimensionH: Number(dimH), shippingClass,
+        },
+      };
+      const res = await fetch(
+        isEdit ? `/api/products/${product!.id}` : "/api/products",
+        { method: isEdit ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+      );
+      const data = await res.json();
+      if (!res.ok || !data.ok) { toast.error(data.message ?? "Failed to save product."); return; }
+      toast.success(isEdit ? "Product updated." : "Product created.");
+      onOpenChange(false);
+      onSaved();
+    } catch {
+      toast.error("Network error. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const sectionTitle = "border-b pb-2 text-lg font-semibold";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[95vh] w-full max-w-2xl overflow-y-auto">
+      <DialogContent className="max-h-[95vh] w-full max-w-3xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Add New Product</DialogTitle>
-          <DialogDescription>Create a new product for {brandName}</DialogDescription>
+          <DialogTitle>{isEdit ? "Edit Product" : "Add New Product"}</DialogTitle>
+          <DialogDescription>
+            {isEdit ? "Update product details. Price is locked." : "All fields are required."}
+          </DialogDescription>
         </DialogHeader>
 
-        <form className="space-y-6" onSubmit={onSubmit}>
+        <div className="space-y-8">
           {/* BASIC INFORMATION */}
-          <div className="space-y-4">
-            <div className="border-b pb-3">
-              <h3 className="text-lg font-semibold">Basic Information</h3>
-            </div>
-
+          <section className="space-y-4">
+            <h3 className={sectionTitle}>Basic Information</h3>
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="title">
-                  Product Name <span className="text-red-500">*</span>
-                </Label>
-                <Input id="title" placeholder="e.g., Premium Cotton T-Shirt" {...form.register("title")} />
-                {form.formState.errors.title && <p className="text-xs text-red-500">{form.formState.errors.title.message}</p>}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="sku">
-                  SKU <span className="text-red-500">*</span>
-                </Label>
-                <Input id="sku" placeholder="e.g., TSH-001" {...form.register("sku")} />
-                {form.formState.errors.sku && <p className="text-xs text-red-500">{form.formState.errors.sku.message}</p>}
-              </div>
+              <Field label="Product Name" required>
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g., Premium Cotton T-Shirt" />
+              </Field>
+              <Field label="SKU" required>
+                <Input value={sku} onChange={(e) => setSku(e.target.value)} placeholder="e.g., TSH-001" />
+              </Field>
             </div>
-
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="brand">
-                  Brand <span className="text-red-500">*</span>
-                </Label>
-                <Input id="brand" value={brandName} disabled className="bg-slate-100 dark:bg-slate-900" />
-              </div>
-
-              <div className="space-y-2">
-                <Label>
-                  Categories <span className="text-red-500">*</span> (select at least one)
-                </Label>
-                <div className="h-40 overflow-y-auto rounded-lg border border-slate-200 p-4 dark:border-slate-800">
-                  <div className="space-y-2">
-                    {categories.length === 0 ? (
-                      <p className="text-sm text-slate-500">No categories available</p>
-                    ) : (
-                      categories.map((category) => (
-                        <label key={category.id} className="flex items-center gap-2">
-                          <Checkbox
-                            checked={form.watch("categoryIds").includes(category.id)}
-                            onCheckedChange={(checked) => {
-                              const current = form.getValues("categoryIds");
-                              form.setValue(
-                                "categoryIds",
-                                checked ? [...current, category.id] : current.filter((id) => id !== category.id),
-                              );
-                            }}
-                          />
-                          <span className="text-sm">{category.name}</span>
-                        </label>
-                      ))
-                    )}
-                  </div>
-                </div>
-                {form.formState.errors.categoryIds && <p className="text-xs text-red-500">{form.formState.errors.categoryIds.message}</p>}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="shortDescription">Short Description</Label>
-              <Input id="shortDescription" placeholder="Brief description for product listings" {...form.register("shortDescription")} />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="description">
-                Full Description <span className="text-red-500">*</span>
-              </Label>
-              <Textarea id="description" placeholder="Detailed product description" rows={4} {...form.register("description")} />
-              {form.formState.errors.description && <p className="text-xs text-red-500">{form.formState.errors.description.message}</p>}
-            </div>
-          </div>
-
-          {/* PRICING & INVENTORY */}
-          <div className="space-y-4">
-            <div className="border-b pb-3">
-              <h3 className="text-lg font-semibold">Pricing & Inventory</h3>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-2">
-                <Label htmlFor="price">
-                  Price (Rs) <span className="text-red-500">*</span>
-                </Label>
-                <Input id="price" type="number" step="0.01" placeholder="0.00" {...form.register("price")} />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="compareAtPrice">Compare at Price (Rs)</Label>
-                <Input id="compareAtPrice" type="number" step="0.01" placeholder="0.00 (optional)" {...form.register("compareAtPrice")} />
-                <p className="text-xs text-slate-500">Leave empty to remove. Enter 0 to clear.</p>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="costPrice">Cost Price (Rs)</Label>
-                <Input id="costPrice" type="number" step="0.01" placeholder="0.00 (optional)" {...form.register("costPrice")} />
-                <p className="text-xs text-slate-500">Leave empty to remove. Enter 0 to clear.</p>
-              </div>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="totalStock">Total Stock</Label>
-                <Input id="totalStock" type="number" placeholder="0" {...form.register("totalStock")} />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Stock Status</Label>
-                <Select value={form.watch("stockStatus")} onValueChange={(value) => form.setValue("stockStatus", value as any)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="In Stock" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="in-stock">In Stock</SelectItem>
-                    <SelectItem value="low-stock">Low Stock</SelectItem>
-                    <SelectItem value="out-of-stock">Out of Stock</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="flex gap-6">
-              <label className="flex items-center gap-2">
-                <Checkbox checked={form.watch("featured")} onCheckedChange={(checked) => form.setValue("featured", Boolean(checked))} />
-                <span className="text-sm font-medium">Featured Product</span>
-              </label>
-              <label className="flex items-center gap-2">
-                <Checkbox checked={form.watch("published")} onCheckedChange={(checked) => form.setValue("published", Boolean(checked))} />
-                <span className="text-sm font-medium">Publish Product</span>
-              </label>
-            </div>
-          </div>
-
-          {/* PRODUCT VARIANTS */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="text-lg font-semibold">Product Variants</h3>
-              <Button type="button" size="sm" onClick={() => variants.append(emptyVariant)}>
-                <Plus className="h-4 w-4" /> Add Variant
-              </Button>
-            </div>
-
-            {variants.fields.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="px-3 py-2 text-left font-medium">Size Type</th>
-                      <th className="px-3 py-2 text-left font-medium">Size</th>
-                      <th className="px-3 py-2 text-left font-medium">Color (optional)</th>
-                      <th className="px-3 py-2 text-left font-medium">Stock</th>
-                      <th className="px-3 py-2 text-left font-medium">SKU Variant</th>
-                      <th className="px-3 py-2 text-right font-medium">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {variants.fields.map((field, index) => (
-                      <tr key={field.id} className="border-b">
-                        <td className="px-3 py-2">
-                          <Input placeholder="Preset (S, M, L...)" {...form.register(`variants.${index}.sizeType` as const)} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <Input placeholder="M" {...form.register(`variants.${index}.size` as const)} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <Input placeholder="Red" {...form.register(`variants.${index}.color` as const)} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <Input type="number" placeholder="0" {...form.register(`variants.${index}.stock` as const)} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <Input placeholder="SKU-M-1" {...form.register(`variants.${index}.skuVariant` as const)} />
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-600 hover:text-red-700"
-                            onClick={() => variants.remove(index)}
-                          >
-                            Remove Variant
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* SIZE CHART */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="text-lg font-semibold">Size Chart</h3>
-              <div className="flex gap-2">
-                <Button type="button" size="sm" variant="outline" onClick={() => setShowSizeVariables(!showSizeVariables)}>
-                  {showSizeVariables ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />} {showSizeVariables ? "Hide" : "Show"} Variables
-                </Button>
-                <Button type="button" size="sm" onClick={() => sizeCharts.append(emptySizeChart)}>
-                  <Plus className="h-4 w-4" /> Add Size Row
-                </Button>
-              </div>
-            </div>
-
-            {showSizeVariables && (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/40">
-                <h4 className="mb-3 font-semibold">Manage Size Variables for This Product</h4>
-                <p className="mb-4 text-xs text-slate-600 dark:text-slate-400">Changes here only affect this product, not others.</p>
-
-                <div className="space-y-3">
-                  {sizeVariables.map((variable) => (
-                    <div key={variable.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-800">
-                      <span className="font-medium">{variable.label}</span>
-                      <div className="flex gap-2">
-                        <Button type="button" variant="outline" size="sm">
-                          Rename
-                        </Button>
-                        <Button type="button" variant="outline" size="sm" className="text-red-600">
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
+              <Field label="Brand" required>
+                <Input value="Auto-assigned from your account" disabled />
+              </Field>
+              <Field label="Categories (select at least one)" required>
+                <div className="grid max-h-44 gap-1 overflow-y-auto rounded-xl border border-slate-200 p-3">
+                  {categories.map((c) => (
+                    <label key={c.id} className="flex items-center gap-2 text-sm">
+                      <Checkbox checked={categoryIds.includes(c.id)} onCheckedChange={(ch) => toggleCategory(c.id, Boolean(ch))} />
+                      {c.name}
+                    </label>
                   ))}
                 </div>
+              </Field>
+            </div>
+            <Field label="Short Description">
+              <Input value={shortDescription} onChange={(e) => setShortDescription(e.target.value)} placeholder="Brief description for product listings" />
+            </Field>
+            <Field label="Full Description" required>
+              <Textarea rows={4} value={fullDescription} onChange={(e) => setFullDescription(e.target.value)} placeholder="Detailed product description" />
+            </Field>
+          </section>
 
-                <div className="mt-4 flex gap-2">
-                  <Input placeholder="Variable name (e.g., waist)" />
-                  <Input placeholder="Display label (e.g., Waist)" />
-                  <Button type="button" variant="default" className="bg-green-600 hover:bg-green-700">
-                    Add
-                  </Button>
+          {/* PRICING & INVENTORY */}
+          <section className="space-y-4">
+            <h3 className={sectionTitle}>Pricing &amp; Inventory</h3>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label={isEdit ? "Price (Rs) — locked" : "Price (Rs)"} required={!isEdit}>
+                <Input
+                  type="number" min="0" step="0.01" value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  placeholder="0.00"
+                  disabled={isEdit}
+                  title={isEdit ? "Price can't be changed when editing." : undefined}
+                />
+              </Field>
+              <Field label="Compare at Price (Rs)">
+                <Input type="number" min="0" step="0.01" value={compareAtPrice} onChange={(e) => setCompareAtPrice(e.target.value)} placeholder="0.00" />
+              </Field>
+              <Field label="Cost Price (Rs)">
+                <Input type="number" min="0" step="0.01" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} placeholder="0.00" />
+              </Field>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Stock Status" required>
+                <Select value={stockStatus} onValueChange={(v) => setStockStatus(v as typeof stockStatus)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="IN_STOCK">In stock</SelectItem>
+                    <SelectItem value="LOW_STOCK">Low stock</SelectItem>
+                    <SelectItem value="OUT_OF_STOCK">Out of stock</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Total Stock" required>
+                <Input type="number" min="0" value={totalStock} onChange={(e) => setTotalStock(e.target.value)} placeholder="0" />
+              </Field>
+              <Field label="Visibility">
+                <Select value={isPublished ? "published" : "draft"} onValueChange={(v) => setIsPublished(v === "published")}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="published">Published</SelectItem>
+                    <SelectItem value="draft">Draft</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={isFeatured} onCheckedChange={(c) => setIsFeatured(Boolean(c))} /> Featured product
+            </label>
+          </section>
+
+          {/* VARIANTS */}
+          <section className="space-y-4">
+            <div className="flex items-center justify-between border-b pb-2">
+              <h3 className="text-lg font-semibold">Variants</h3>
+              <Button type="button" size="sm" onClick={addVariant}><Plus className="mr-1 h-4 w-4" /> Add Variant</Button>
+            </div>
+            <div className="space-y-2">
+              {variants.map((v, i) => (
+                <div key={i} className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] items-end gap-2">
+                  <Field label="Size">
+                    <Select value={v.size} onValueChange={(val) => updateVariant(i, { size: val })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>{SIZE_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Color"><Input value={v.color} onChange={(e) => updateVariant(i, { color: e.target.value })} placeholder="Pink" /></Field>
+                  <Field label="Stock"><Input type="number" min="0" value={v.stockQuantity} onChange={(e) => updateVariant(i, { stockQuantity: e.target.value })} /></Field>
+                  <Field label="Variant SKU"><Input value={v.skuVariant} onChange={(e) => updateVariant(i, { skuVariant: e.target.value })} placeholder="SKU-S-PINK" /></Field>
+                  <Button type="button" variant="ghost" className="text-rose-600" onClick={() => removeVariant(i)}><Trash2 className="h-4 w-4" /></Button>
                 </div>
-              </div>
-            )}
+              ))}
+            </div>
+          </section>
 
-            {sizeCharts.fields.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-slate-50 dark:bg-slate-900/40">
-                      <th className="px-3 py-2 text-left font-medium">Size</th>
-                      <th className="px-3 py-2 text-left font-medium">Height</th>
-                      <th className="px-3 py-2 text-left font-medium">Width</th>
-                      <th className="px-3 py-2 text-left font-medium">Length</th>
-                      <th className="px-3 py-2 text-left font-medium">Unit</th>
-                      <th className="px-3 py-2 text-right font-medium">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sizeCharts.fields.map((field, index) => (
-                      <tr key={field.id} className="border-b">
-                        <td className="px-3 py-2">
-                          <Select value={form.watch(`sizeCharts.${index}.size` as const)} onValueChange={(value) => form.setValue(`sizeCharts.${index}.size` as const, value)}>
-                            <SelectTrigger className="h-8">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="M">M</SelectItem>
-                              <SelectItem value="S">S</SelectItem>
-                              <SelectItem value="L">L</SelectItem>
-                              <SelectItem value="XL">XL</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </td>
-                        <td className="px-3 py-2">
-                          <Input placeholder="Value" {...form.register(`sizeCharts.${index}.height` as const)} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <Input placeholder="Value" {...form.register(`sizeCharts.${index}.width` as const)} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <Input placeholder="Value" {...form.register(`sizeCharts.${index}.length` as const)} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <Select value={form.watch(`sizeCharts.${index}.unit` as const) || "cm"} onValueChange={(value) => form.setValue(`sizeCharts.${index}.unit` as const, value)}>
-                            <SelectTrigger className="h-8">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="cm">cm</SelectItem>
-                              <SelectItem value="in">in</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <Button type="button" variant="ghost" size="sm" className="text-red-600 hover:text-red-700" onClick={() => sizeCharts.remove(index)}>
-                            Remove
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          {/* SIZE CHART */}
+          <section className="space-y-4">
+            <div className="flex items-center justify-between border-b pb-2">
+              <h3 className="text-lg font-semibold">Size Chart</h3>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => setShowVariables((s) => !s)}>
+                  {showVariables ? "Hide Variables" : "Manage Variables"}
+                </Button>
+                <Button type="button" size="sm" onClick={addSizeRow}><Plus className="mr-1 h-4 w-4" /> Add Size Row</Button>
               </div>
-            )}
-          </div>
-
-          {/* PRODUCT IMAGES */}
-          <div className="space-y-4">
-            <div className="border-b pb-3">
-              <h3 className="text-lg font-semibold">Product Images</h3>
             </div>
 
-            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-12 text-center text-slate-500 transition hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-slate-700 dark:bg-slate-900/40 dark:hover:bg-slate-900/60">
-              <Upload className="h-8 w-8" />
-              <span className="text-sm font-medium">Click to upload or drag images</span>
-              <span className="text-xs">PNG, JPG, GIF up to 10MB</span>
-              <input type="file" multiple accept="image/*" className="hidden" onChange={(e) => onUploadImages(e.target.files)} />
-            </label>
-
-            {images.length > 0 && (
-              <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
-                {images.map((image, index) => (
-                  <button
-                    key={image + index}
-                    type="button"
-                    onClick={() => {
-                      const next = images.filter((_, i) => i !== index);
-                      setImages(next);
-                      form.setValue("images", next);
-                    }}
-                    className="group relative overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800"
-                  >
-                    <img src={image} alt={`Product ${index + 1}`} className="h-24 w-full object-cover transition group-hover:scale-110" />
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition group-hover:opacity-100">
-                      <Trash2 className="h-4 w-4 text-white" />
-                    </div>
-                  </button>
+            {showVariables && (
+              <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-medium">Manage Size Variables for This Product</p>
+                <p className="text-xs text-slate-500">Changes here only affect this product, not others.</p>
+                <div className="flex gap-2">
+                  <Input value={newVarName} onChange={(e) => setNewVarName(e.target.value)} placeholder="Variable name (e.g., waist)" />
+                  <Input value={newVarLabel} onChange={(e) => setNewVarLabel(e.target.value)} placeholder="Display label (e.g., Waist)" />
+                  <Button type="button" onClick={addVariable}>Add</Button>
+                </div>
+                {sizeVariables.map((v) => (
+                  <div key={v.name} className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <span className="text-sm font-medium">{v.label} <span className="text-slate-400">({v.name})</span></span>
+                    <Button type="button" size="sm" variant="ghost" className="text-rose-600" onClick={() => removeVariable(v.name)}>Delete</Button>
+                  </div>
                 ))}
               </div>
             )}
-          </div>
 
-          {/* SHIPPING INFORMATION */}
-          <div className="space-y-4">
-            <div className="border-b pb-3">
-              <h3 className="text-lg font-semibold">Shipping Information</h3>
-            </div>
+            {sizeChart.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-slate-500">
+                      <th className="py-2 pr-2">Size</th>
+                      {sizeVariables.map((v) => <th key={v.name} className="py-2 pr-2">{v.label}</th>)}
+                      <th className="py-2 pr-2">Unit</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sizeChart.map((r, i) => (
+                      <tr key={i} className="border-b">
+                        <td className="py-2 pr-2">
+                          <Select value={r.size} onValueChange={(val) => updateSizeRow(i, { size: val })}>
+                            <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                            <SelectContent>{SIZE_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                          </Select>
+                        </td>
+                        {sizeVariables.map((v) => (
+                          <td key={v.name} className="py-2 pr-2">
+                            <Input value={r.measurements[v.name] ?? ""} onChange={(e) => updateMeasurement(i, v.name, e.target.value)} placeholder="Value" className="w-24" />
+                          </td>
+                        ))}
+                        <td className="py-2 pr-2">
+                          <Select value={r.unit} onValueChange={(val) => updateSizeRow(i, { unit: val as "cm" | "in" })}>
+                            <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                            <SelectContent><SelectItem value="cm">cm</SelectItem><SelectItem value="in">in</SelectItem></SelectContent>
+                          </Select>
+                        </td>
+                        <td><Button type="button" variant="ghost" className="text-rose-600" onClick={() => removeSizeRow(i)}>Remove</Button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
 
+          {/* PRODUCT IMAGES */}
+          <section className="space-y-4">
+            <h3 className={sectionTitle}>Product Images</h3>
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 p-8 text-center">
+              {uploading ? <Loader2 className="h-6 w-6 animate-spin text-slate-400" /> : <Upload className="h-6 w-6 text-slate-400" />}
+              <span className="text-sm text-slate-600">{uploading ? "Uploading…" : "Click to upload images"}</span>
+              <span className="text-xs text-slate-400">PNG, JPG, WEBP, GIF up to 10MB</span>
+              <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => onUpload(e.target.files)} />
+            </label>
+            {images.length > 0 && (
+              <div className="flex flex-wrap gap-3">
+                {images.map((url) => (
+                  <div key={url} className="relative h-24 w-24 overflow-hidden rounded-xl border border-slate-200">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={url} alt="" className="h-full w-full object-cover" />
+                    <button type="button" onClick={() => removeImage(url)} className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-white">
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* SHIPPING */}
+          <section className="space-y-4">
+            <h3 className={sectionTitle}>Shipping Information</h3>
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="weight">Weight (kg)</Label>
-                <Input id="weight" type="number" step="0.01" placeholder="0.5" {...form.register("weight")} />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="shippingClass">Shipping Class</Label>
-                <Input id="shippingClass" placeholder="Standard" {...form.register("shippingClass")} />
-              </div>
+              <Field label="Weight (kg)" required><Input type="number" min="0" step="0.01" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="0.5" /></Field>
+              <Field label="Shipping Class" required><Input value={shippingClass} onChange={(e) => setShippingClass(e.target.value)} placeholder="Standard" /></Field>
             </div>
-
-            <div>
-              <Label>Dimensions (L × W × H in cm)</Label>
-              <div className="mt-2 grid gap-3 sm:grid-cols-3">
-                <Input placeholder="Length" type="number" {...form.register("length")} />
-                <Input placeholder="Width" type="number" {...form.register("width")} />
-                <Input placeholder="Height" type="number" {...form.register("height")} />
+            <Field label="Dimensions (L × W × H in cm)" required>
+              <div className="grid grid-cols-3 gap-2">
+                <Input type="number" min="0" value={dimL} onChange={(e) => setDimL(e.target.value)} placeholder="Length" />
+                <Input type="number" min="0" value={dimW} onChange={(e) => setDimW(e.target.value)} placeholder="Width" />
+                <Input type="number" min="0" value={dimH} onChange={(e) => setDimH(e.target.value)} placeholder="Height" />
               </div>
-            </div>
-          </div>
+            </Field>
+          </section>
 
           {/* SEO */}
-          <div className="space-y-4">
-            <div className="border-b pb-3">
-              <h3 className="text-lg font-semibold">SEO</h3>
-            </div>
+          <section className="space-y-4">
+            <h3 className={sectionTitle}>SEO</h3>
+            <Field label="SEO Title" required><Input value={seoTitle} onChange={(e) => setSeoTitle(e.target.value)} placeholder="SEO optimized title" /></Field>
+            <Field label="SEO Description" required><Textarea rows={3} value={seoDescription} onChange={(e) => setSeoDescription(e.target.value)} placeholder="SEO optimized description" /></Field>
+          </section>
+        </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="seoTitle">SEO Title</Label>
-              <Input id="seoTitle" placeholder="SEO optimized title" {...form.register("seoTitle")} />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="seoDescription">SEO Description</Label>
-              <Textarea id="seoDescription" placeholder="SEO optimized description" rows={3} {...form.register("seoDescription")} />
-            </div>
-          </div>
-
-          {/* ACTIONS */}
-          <DialogFooter className="flex gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
-              Create Product
-            </Button>
-          </DialogFooter>
-        </form>
+        <DialogFooter className="mt-4">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button type="button" onClick={onSubmit} disabled={submitting || uploading}>
+            {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            {isEdit ? "Save Changes" : "Create Product"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-export { ProductForm };
+function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label} {required ? <span className="text-rose-500">*</span> : null}</Label>
+      {children}
+    </div>
+  );
+}

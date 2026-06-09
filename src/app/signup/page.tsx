@@ -6,7 +6,7 @@ export default function SignupPage() {
     <AuthShell
       eyebrow="Brand registration request"
       title="Create a brand account request"
-      description="Only brands can sign up here. Admin access is seeded from mock data and managed internally."
+      description="Select your brand and submit a registration request. An admin reviews and approves accounts before sign-in."
     >
       <SignupForm />
     </AuthShell>

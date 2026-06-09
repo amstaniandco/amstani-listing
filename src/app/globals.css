@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Bind the dark: variant to an explicit .dark class instead of the OS media
+   query (Tailwind v4's default). The app is forced to light mode, so .dark is
+   never applied and dark: styles stay off regardless of OS preference. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: 240 23% 98%;
   --foreground: 224 71% 4%;

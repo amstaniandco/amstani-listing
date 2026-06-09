@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
@@ -10,11 +10,10 @@ import Link from "next/link";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { usePortalStore } from "@/store/portal-store";
-import type { SignupInput } from "@/types/portal";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const signupSchema = z
   .object({
@@ -22,7 +21,7 @@ const signupSchema = z
     email: z.string().email("Enter a valid email address."),
     password: z.string().min(8, "Password must be at least 8 characters."),
     confirmPassword: z.string().min(8, "Confirm your password."),
-    brandName: z.string().min(2, "Enter a brand name."),
+    brandId: z.string().min(1, "Select your brand."),
     phoneNumber: z.string().min(7, "Enter a valid phone number."),
   })
   .refine((values) => values.password === values.confirmPassword, {
@@ -31,13 +30,16 @@ const signupSchema = z
   });
 
 type SignupValues = z.infer<typeof signupSchema>;
+type Brand = { id: string; name: string };
 
 function SignupForm() {
   const router = useRouter();
-  const signupBrand = usePortalStore((state) => state.signupBrand);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [brands, setBrands] = useState<Brand[]>([]);
+  const [brandsLoading, setBrandsLoading] = useState(true);
+
   const form = useForm<SignupValues>({
     resolver: zodResolver(signupSchema),
     defaultValues: {
@@ -45,34 +47,67 @@ function SignupForm() {
       email: "",
       password: "",
       confirmPassword: "",
-      brandName: "",
+      brandId: "",
       phoneNumber: "",
     },
   });
 
-  const onSubmit = form.handleSubmit((values) => {
+  // Load the existing brands for the dropdown (reps select; cannot create).
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/brands");
+        const data = await res.json();
+        if (active && data.ok) setBrands(data.brands);
+      } catch {
+        // leave empty; user sees "no brands" state
+      } finally {
+        if (active) setBrandsLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const onSubmit = form.handleSubmit(async (values) => {
     setSubmitting(true);
-    const payload: SignupInput = values;
-    const result = signupBrand(payload);
-    setSubmitting(false);
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName: values.fullName,
+          email: values.email,
+          phoneNumber: values.phoneNumber,
+          password: values.password,
+          brandId: values.brandId,
+        }),
+      });
+      const data = await res.json();
 
-    if (!result.ok) {
-      form.setError("root", { message: result.message });
-      toast.error(result.message);
-      return;
+      if (!res.ok || !data.ok) {
+        const message = data.message ?? "Unable to submit request.";
+        form.setError("root", { message });
+        toast.error(message);
+        return;
+      }
+
+      toast.success(data.message ?? "Request submitted. Pending admin approval.");
+      router.push("/login");
+    } catch {
+      const message = "Network error. Please try again.";
+      form.setError("root", { message });
+      toast.error(message);
+    } finally {
+      setSubmitting(false);
     }
-
-    toast.success("Brand request submitted. An admin review is now pending.");
-    router.push("/login");
   });
 
   return (
-    <Card className="border-slate-200/80 shadow-[0_30px_60px_-25px_rgba(15,23,42,0.35)] dark:border-slate-800">
-      <CardHeader className="space-y-2">
-        <CardTitle className="text-2xl">Create brand account</CardTitle>
-        <CardDescription>Brand registration is request-based. An admin must approve the account before login.</CardDescription>
-      </CardHeader>
-      <CardContent>
+    <Card className="border-slate-200 shadow-sm">
+      <CardContent className="pt-6">
         <form className="space-y-4" onSubmit={onSubmit}>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
@@ -81,9 +116,24 @@ function SignupForm() {
               {form.formState.errors.fullName ? <p className="text-sm text-rose-500">{form.formState.errors.fullName.message}</p> : null}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="brandName">Brand name</Label>
-              <Input id="brandName" placeholder="Northstar Wear" {...form.register("brandName")} />
-              {form.formState.errors.brandName ? <p className="text-sm text-rose-500">{form.formState.errors.brandName.message}</p> : null}
+              <Label>Brand</Label>
+              <Select
+                value={form.watch("brandId")}
+                onValueChange={(value) => form.setValue("brandId", value, { shouldValidate: true })}
+                disabled={brandsLoading}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={brandsLoading ? "Loading brands…" : "Select your brand"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {brands.map((brand) => (
+                    <SelectItem key={brand.id} value={brand.id}>
+                      {brand.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {form.formState.errors.brandId ? <p className="text-sm text-rose-500">{form.formState.errors.brandId.message}</p> : null}
             </div>
           </div>
 
@@ -134,7 +184,7 @@ function SignupForm() {
           {form.formState.errors.root ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300">{form.formState.errors.root.message}</div> : null}
 
           <Button type="submit" className="w-full" disabled={submitting}>
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Submit brand request
           </Button>
         </form>

@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatCurrency } from "@/lib/format";
 import { ProductForm, type CategoryOption, type EditProduct } from "@/features/products/components/product-form";
 import { ProductView } from "@/features/products/components/product-view";
 
@@ -29,7 +28,21 @@ interface ProductListItem {
   brandName: string | null;
   categoryNames: string[];
   totalStock: number;
+  approvalStatus: "PENDING" | "APPROVED" | "REJECTED";
+  rejectReason: string | null;
 }
+
+const approvalVariant: Record<ProductListItem["approvalStatus"], "warning" | "success" | "danger"> = {
+  PENDING: "warning",
+  APPROVED: "success",
+  REJECTED: "danger",
+};
+
+const approvalLabel: Record<ProductListItem["approvalStatus"], string> = {
+  PENDING: "Awaiting approval",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+};
 
 const navItems: NavItem[] = [
   { label: "Dashboard", href: "/brand/dashboard", icon: "dashboard" },
@@ -163,9 +176,9 @@ export function BrandProductsClient({
                     <TableHead>SKU</TableHead>
                     <TableHead>Brand</TableHead>
                     <TableHead>Category</TableHead>
-                    <TableHead>Price</TableHead>
                     <TableHead>Stock</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>Approval</TableHead>
+                    <TableHead>Listing</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -190,8 +203,17 @@ export function BrandProductsClient({
                           <span className="text-sm">{p.categoryNames.slice(0, 2).join(", ")}{p.categoryNames.length > 2 ? "…" : ""}</span>
                         ) : "—"}
                       </TableCell>
-                      <TableCell>{formatCurrency(p.price)}</TableCell>
                       <TableCell>{p.totalStock}</TableCell>
+                      <TableCell>
+                        <Badge variant={approvalVariant[p.approvalStatus]}>
+                          {approvalLabel[p.approvalStatus]}
+                        </Badge>
+                        {p.approvalStatus === "REJECTED" && p.rejectReason ? (
+                          <p className="mt-1 max-w-[14rem] text-xs text-rose-600" title={p.rejectReason}>
+                            {p.rejectReason}
+                          </p>
+                        ) : null}
+                      </TableCell>
                       <TableCell>
                         <Badge variant={p.isPublished ? "success" : "secondary"}>
                           {p.isPublished ? "Published" : "Disabled"}
@@ -203,9 +225,15 @@ export function BrandProductsClient({
                             <ScanEye className="mr-2 h-4 w-4" /> View
                           </Button>
                           <Button variant="outline" size="sm" disabled={busyId === p.id} onClick={() => openEdit(p.id)}>
-                            <Pencil className="mr-2 h-4 w-4" /> Edit
+                            <Pencil className="mr-2 h-4 w-4" /> {p.approvalStatus === "REJECTED" ? "Edit & resubmit" : "Edit"}
                           </Button>
-                          <Button variant="outline" size="sm" onClick={() => togglePublish(p.id, !p.isPublished)}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={!p.isPublished && p.approvalStatus !== "APPROVED"}
+                            title={!p.isPublished && p.approvalStatus !== "APPROVED" ? "Awaiting admin approval" : undefined}
+                            onClick={() => togglePublish(p.id, !p.isPublished)}
+                          >
                             {p.isPublished ? (
                               <><EyeOff className="mr-2 h-4 w-4" /> Disable</>
                             ) : (

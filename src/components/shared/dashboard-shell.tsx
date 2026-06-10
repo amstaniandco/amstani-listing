@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -9,7 +10,7 @@ import {
   LogOut,
   Menu,
   Package,
-  Shield,
+  Receipt,
   UserRound,
 } from "lucide-react";
 
@@ -36,7 +37,7 @@ import { cn } from "@/lib/utils";
 
 // Icons are referenced by NAME (a plain string) so navItems can be passed from
 // a Server Component to this Client Component — component refs aren't serializable.
-export type NavIcon = "dashboard" | "products" | "categories" | "profile" | "admin";
+export type NavIcon = "dashboard" | "products" | "categories" | "profile" | "admin" | "taxes";
 
 export interface NavItem {
   label: string;
@@ -50,6 +51,7 @@ const ICONS: Record<NavIcon, React.ComponentType<{ className?: string }>> = {
   categories: Archive,
   profile: UserRound,
   admin: LayoutDashboard,
+  taxes: Receipt,
 };
 
 export interface ShellUser {
@@ -88,13 +90,14 @@ function DashboardShell({ title, description, navItems, user, children }: Dashbo
       <div className="mx-auto flex min-h-screen w-full max-w-[1600px]">
         <aside className="hidden w-72 flex-col border-r border-slate-200 bg-white/80 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/70 lg:flex">
           <div className="flex h-20 items-center gap-3 px-6">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white dark:bg-white dark:text-slate-950">
-              <Shield className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">Amstani</p>
-              <p className="text-lg font-semibold">Portal</p>
-            </div>
+            <Image
+              src="/Amstani.png"
+              alt="Amstani"
+              width={120}
+              height={48}
+              priority
+              className="h-12 w-auto"
+            />
           </div>
           <Separator />
           <nav className="flex flex-1 flex-col gap-1 p-4">

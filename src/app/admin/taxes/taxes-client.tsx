@@ -1,0 +1,257 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { Percent, Plus, Save, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+
+import { DashboardShell, type NavItem, type ShellUser } from "@/components/shared/dashboard-shell";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { formatCurrency } from "@/lib/format";
+
+const navItems: NavItem[] = [
+  { label: "Dashboard", href: "/admin/dashboard", icon: "admin" },
+  { label: "Shipping & Taxes", href: "/admin/taxes", icon: "taxes" },
+  { label: "Profile", href: "/profile", icon: "profile" },
+];
+
+interface TaxSettings {
+  profitPct: number;
+  tariffPct: number;
+  shippingPerKg: number;
+}
+interface Bracket {
+  minKg: number;
+  maxKg: number | null;
+  ratePerKg: number;
+}
+interface BracketRow {
+  minKg: string;
+  maxKg: string; // "" => open-ended
+  ratePerKg: string;
+}
+
+const SAMPLE = 100;
+const SAMPLE_KG = 1; // illustrative weight for the preview
+
+export function TaxSettingsClient({
+  shell,
+  initialSettings,
+  initialBrackets,
+}: {
+  shell: ShellUser;
+  initialSettings: TaxSettings;
+  initialBrackets: Bracket[];
+}) {
+  const router = useRouter();
+  const [profit, setProfit] = useState(String(initialSettings.profitPct));
+  const [tariff, setTariff] = useState(String(initialSettings.tariffPct));
+  const [perKg, setPerKg] = useState(String(initialSettings.shippingPerKg));
+  const [savingPct, setSavingPct] = useState(false);
+
+  const [rows, setRows] = useState<BracketRow[]>(
+    initialBrackets.length
+      ? initialBrackets.map((b) => ({
+          minKg: String(b.minKg),
+          maxKg: b.maxKg == null ? "" : String(b.maxKg),
+          ratePerKg: String(b.ratePerKg),
+        }))
+      : [{ minKg: "", maxKg: "", ratePerKg: "" }],
+  );
+  const [savingRates, setSavingRates] = useState(false);
+
+  const p = Number(profit) || 0;
+  const t = Number(tariff) || 0;
+  const gKg = Number(perKg) || 0;
+  const totalPct = p + t;
+  // Preview: general per-kg rate × a sample 1kg parcel.
+  const sampleShip = Math.round(SAMPLE_KG * gKg * 100) / 100;
+  const finalSample = Math.round((SAMPLE * (1 + totalPct / 100) + sampleShip) * 100) / 100;
+
+  async function savePcts() {
+    if (p < 0 || t < 0 || gKg < 0) {
+      toast.error("Values can't be negative.");
+      return;
+    }
+    setSavingPct(true);
+    try {
+      const res = await fetch("/api/admin/tax-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profitPct: p, tariffPct: t, shippingPerKg: gKg }),
+      });
+      const data = await res.json();
+      if (!data.ok) { toast.error(data.message ?? "Could not save."); return; }
+      toast.success("Tax percentages updated.");
+      router.refresh();
+    } finally {
+      setSavingPct(false);
+    }
+  }
+
+  function addRow() {
+    setRows((r) => [...r, { minKg: "", maxKg: "", ratePerKg: "" }]);
+  }
+  function updateRow(i: number, patch: Partial<BracketRow>) {
+    setRows((r) => r.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+  }
+  function removeRow(i: number) {
+    setRows((r) => r.filter((_, idx) => idx !== i));
+  }
+
+  async function saveRates() {
+    const brackets: Bracket[] = [];
+    for (const r of rows) {
+      const minKg = Number(r.minKg);
+      const ratePerKg = Number(r.ratePerKg);
+      const maxKg = r.maxKg.trim() === "" ? null : Number(r.maxKg);
+      if (Number.isNaN(minKg) || minKg < 0) { toast.error("Each row needs a valid min weight."); return; }
+      if (Number.isNaN(ratePerKg) || ratePerKg < 0) { toast.error("Each row needs a valid per-kg rate."); return; }
+      if (maxKg != null && maxKg <= minKg) { toast.error("Max weight must be greater than min weight."); return; }
+      brackets.push({ minKg, maxKg, ratePerKg });
+    }
+    setSavingRates(true);
+    try {
+      const res = await fetch("/api/admin/shipping-rates", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brackets }),
+      });
+      const data = await res.json();
+      if (!data.ok) { toast.error(data.message ?? "Could not save rates."); return; }
+      toast.success("Shipping rates updated.");
+      router.refresh();
+    } finally {
+      setSavingRates(false);
+    }
+  }
+
+  return (
+    <DashboardShell
+      title="Shipping & Taxes"
+      description="Profit & tariff percentages plus weight-based shipping costs, applied at approval."
+      navItems={navItems}
+      user={shell}
+    >
+      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+        <div className="space-y-6">
+          {/* PERCENTAGES */}
+          <Card className="border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-slate-950/80">
+            <CardHeader>
+              <CardTitle>Tax percentages</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Applied to the wholesale price. A product can override these during review.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <PctField label="Profit Percentage" value={profit} onChange={setProfit} />
+                <PctField label="Tariffs" value={tariff} onChange={setTariff} />
+                <div className="space-y-1.5">
+                  <Label>General shipping (per kg)</Label>
+                  <Input type="number" min="0" step="0.01" value={perKg}
+                    onChange={(e) => setPerKg(e.target.value)} placeholder="0.00" />
+                </div>
+              </div>
+              <Button onClick={savePcts} disabled={savingPct}>
+                <Save className="mr-2 h-4 w-4" />
+                {savingPct ? "Saving…" : "Save settings"}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* WEIGHT-BASED SHIPPING */}
+          <Card className="border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-slate-950/80">
+            <CardHeader>
+              <CardTitle>Special per-kg rates by weight</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                By default shipping = weight × the general per-kg rate above. Add a special bracket
+                to charge a different per-kg rate for a weight range (e.g. 100–200 kg @ $20/kg →
+                150 kg costs $3,000). Leave “Max kg” blank for an open-ended top tier. A product can
+                still override shipping with a flat custom cost during review.
+              </p>
+
+              <div className="space-y-2">
+                <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+                  <span>Min kg</span>
+                  <span>Max kg</span>
+                  <span>Rate ($/kg)</span>
+                  <span />
+                </div>
+                {rows.map((r, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_1fr_1fr_auto] items-center gap-2">
+                    <Input type="number" min="0" step="0.01" value={r.minKg}
+                      onChange={(e) => updateRow(i, { minKg: e.target.value })} placeholder="0" />
+                    <Input type="number" min="0" step="0.01" value={r.maxKg}
+                      onChange={(e) => updateRow(i, { maxKg: e.target.value })} placeholder="∞" />
+                    <Input type="number" min="0" step="0.01" value={r.ratePerKg}
+                      onChange={(e) => updateRow(i, { ratePerKg: e.target.value })} placeholder="0.00" />
+                    <Button type="button" variant="ghost" className="text-rose-600" onClick={() => removeRow(i)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={addRow}>
+                  <Plus className="mr-1 h-4 w-4" /> Add bracket
+                </Button>
+                <Button onClick={saveRates} disabled={savingRates}>
+                  <Save className="mr-2 h-4 w-4" />
+                  {savingRates ? "Saving…" : "Save shipping rates"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* PREVIEW */}
+        <Card className="h-fit border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-slate-950/80">
+          <CardHeader>
+            <CardTitle>Preview</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <Row label="Sample base price" value={formatCurrency(SAMPLE)} />
+            <Row label={`Profit (${p}%)`} value={`+ ${formatCurrency((SAMPLE * p) / 100)}`} />
+            <Row label={`Tariffs (${t}%)`} value={`+ ${formatCurrency((SAMPLE * t) / 100)}`} />
+            <Row label={`Shipping (${SAMPLE_KG}kg × ${formatCurrency(gKg)}/kg)`} value={`+ ${formatCurrency(sampleShip)}`} />
+            <Separator />
+            <Row label="Final price" value={formatCurrency(finalSample)} strong />
+            <p className="pt-1 text-xs text-slate-400">
+              Actual shipping = product weight × rate (special bracket or general), unless overridden.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    </DashboardShell>
+  );
+}
+
+function PctField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <div className="relative">
+        <Input type="number" min="0" step="0.01" value={value}
+          onChange={(e) => onChange(e.target.value)} placeholder="0" className="pr-9" />
+        <Percent className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-slate-500 dark:text-slate-400">{label}</span>
+      <span className={strong ? "text-base font-semibold" : "font-medium"}>{value}</span>
+    </div>
+  );
+}

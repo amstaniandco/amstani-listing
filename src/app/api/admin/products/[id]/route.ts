@@ -1,7 +1,103 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
 import { requireAdmin } from "@/lib/auth/current-user";
-import { deleteProductAsAdmin } from "@/lib/data/products";
+import {
+  deleteProductAsAdmin,
+  getFullProductAsAdmin,
+  updateFullProductAsAdmin,
+} from "@/lib/data/products";
+
+const variantSchema = z.object({
+  size: z.string().min(1),
+  color: z.string().min(1),
+  stockQuantity: z.coerce.number().min(0),
+  skuVariant: z.string().min(1),
+  priceOverride: z.coerce.number().min(0).nullable().optional(),
+  isCustomSize: z.boolean().optional(),
+});
+const sizeChartSchema = z.object({
+  size: z.string().min(1),
+  unit: z.enum(["cm", "in"]),
+  measurements: z.record(z.string(), z.string()),
+});
+// Admin update: price IS editable here (unlike the brand-rep path).
+const updateSchema = z.object({
+  name: z.string().min(3),
+  sku: z.string().min(2),
+  shortDescription: z.string().min(1),
+  fullDescription: z.string().min(10),
+  categoryIds: z.array(z.string()).min(1),
+  price: z.coerce.number().min(0),
+  compareAtPrice: z.coerce.number().min(0).nullable().optional(),
+  costPrice: z.coerce.number().min(0).nullable().optional(),
+  stockStatus: z.enum(["IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK"]),
+  totalStock: z.coerce.number().min(0),
+  isFeatured: z.boolean(),
+  isPublished: z.boolean(),
+  seoTitle: z.string().nullable().optional(),
+  seoDescription: z.string().nullable().optional(),
+  images: z.array(z.string()).min(1),
+  variants: z.array(variantSchema).min(1),
+  sizeCharts: z.array(sizeChartSchema).min(1),
+  shipping: z.object({
+    weight: z.coerce.number().min(0).nullable().optional(),
+    dimensionL: z.coerce.number().min(0).nullable().optional(),
+    dimensionW: z.coerce.number().min(0).nullable().optional(),
+    dimensionH: z.coerce.number().min(0).nullable().optional(),
+    shippingClass: z.string().nullable().optional(),
+  }),
+  // Per-product overrides (null => use global rates / weight-bracket lookup).
+  profitPct: z.coerce.number().min(0).max(1000).nullable().optional(),
+  tariffPct: z.coerce.number().min(0).max(1000).nullable().optional(),
+  shippingCostOverride: z.coerce.number().min(0).nullable().optional(),
+});
+
+// Admin loads any product's full detail (not brand-scoped) for editing.
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    await requireAdmin();
+  } catch {
+    return NextResponse.json({ ok: false, message: "Forbidden." }, { status: 403 });
+  }
+  const { id } = await params;
+  try {
+    const product = await getFullProductAsAdmin(id);
+    if (!product) return NextResponse.json({ ok: false, message: "Not found." }, { status: 404 });
+    return NextResponse.json({ ok: true, product });
+  } catch (e) {
+    return NextResponse.json({ ok: false, message: String((e as Error).message) }, { status: 500 });
+  }
+}
+
+// Admin edits a product (any field, including price) before approving it.
+export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    await requireAdmin();
+  } catch {
+    return NextResponse.json({ ok: false, message: "Forbidden." }, { status: 403 });
+  }
+  const { id } = await params;
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ ok: false, message: "Invalid body." }, { status: 400 });
+  }
+  const parsed = updateSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { ok: false, message: "Check the product fields.", issues: parsed.error.flatten() },
+      { status: 422 },
+    );
+  }
+  try {
+    await updateFullProductAsAdmin(id, parsed.data);
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return NextResponse.json({ ok: false, message: String((e as Error).message) }, { status: 500 });
+  }
+}
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {

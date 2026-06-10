@@ -11,6 +11,7 @@ export type Role = "USER" | "ADMIN" | "BRAND_REP";
 export type UserStatus = "PENDING" | "APPROVED" | "BLOCKED";
 export type StockStatus = "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK"; // adjust if MAIN's enum differs
 export type CategoryRequestStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED"; // product moderation, added by main_0005
 
 export interface UserRow {
   id: string;
@@ -58,8 +59,41 @@ export interface ProductRow {
   seoDescription: string | null;
   mainImage: string | null;
   brandId: string;
+  // Product moderation (added by main_0005). Existing rows default to APPROVED.
+  approvalStatus: ApprovalStatus;
+  rejectReason: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  submittedAt: string | null;
+  // Tax overrides + wholesale base (added by main_0006). null pct => use global.
+  profitPct: number | null;
+  tariffPct: number | null;
+  shipmentPct: number | null; // legacy (main_0006); superseded by weight-based shipping in main_0007
+  wholesalePrice: number | null;
+  // Per-product flat shipping-cost override (main_0007). null => weight lookup.
+  shippingCostOverride: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TaxSettingsRow {
+  id: string; // always 'default' (single global row)
+  profitPct: number;
+  tariffPct: number;
+  shipmentPct: number; // legacy/unused since main_0007
+  shippingPerKg: number; // general $/kg rate (main_0008)
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+// Special weight bracket: weight in [minKg, maxKg] uses `cost` as a $/kg rate
+// (main_0008). maxKg null => open top.
+export interface ShippingRateRow {
+  id: string;
+  minKg: number;
+  maxKg: number | null;
+  cost: number; // reinterpreted as $/kg
+  createdAt: string;
 }
 
 export interface ProductCategoryRow {
@@ -150,6 +184,8 @@ export interface Database {
       shipping_info: Table<ShippingInfoRow>;
       category_size_variable: Table<CategorySizeVariableRow>;
       category_request: Table<CategoryRequestRow>;
+      tax_settings: Table<TaxSettingsRow>;
+      shipping_rate: Table<ShippingRateRow>;
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;

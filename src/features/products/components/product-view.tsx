@@ -54,9 +54,7 @@ export function ProductView({ open, onOpenChange, product }: ProductViewProps) {
 
             {/* pricing */}
             <Section title="Pricing & Inventory">
-              <Row label="Price" value={formatCurrency(product.price)} />
-              <Row label="Compare at" value={product.compareAtPrice != null ? formatCurrency(product.compareAtPrice) : "—"} />
-              <Row label="Cost" value={product.costPrice != null ? formatCurrency(product.costPrice) : "—"} />
+              <Row label="Wholesale Price" value={formatCurrency(product.price)} />
               <Row label="Stock status" value={product.stockStatus.replace("_", " ")} />
               <Row label="Total stock" value={String(product.totalStock)} />
             </Section>

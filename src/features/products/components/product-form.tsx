@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { formatCurrency } from "@/lib/format";
 
 export interface CategoryOption {
   id: string;
@@ -58,6 +59,27 @@ export interface EditProduct {
     weight: number | null; dimensionL: number | null; dimensionW: number | null;
     dimensionH: number | null; shippingClass: string | null;
   };
+  // Per-product overrides (admin mode). null => use the global default / weight lookup.
+  profitPct?: number | null;
+  tariffPct?: number | null;
+  shipmentPct?: number | null; // legacy, unused
+  shippingCostOverride?: number | null;
+  wholesalePrice?: number | null;
+}
+
+// Special per-kg bracket: weight in [minKg, maxKg] charged at ratePerKg $/kg.
+export interface ShippingBracketDefault {
+  minKg: number;
+  maxKg: number | null;
+  ratePerKg: number;
+}
+
+// Global tax/shipping defaults passed into the form so the admin can see/override.
+export interface TaxDefaults {
+  profitPct: number;
+  tariffPct: number;
+  shippingPerKg: number; // general $/kg rate
+  shippingBrackets: ShippingBracketDefault[];
 }
 
 interface ProductFormProps {
@@ -67,20 +89,37 @@ interface ProductFormProps {
   categories: CategoryOption[];
   product?: EditProduct | null; // present => edit mode
   onSaved: () => void;
+  // Admin mode: override where edits are saved and allow editing the price.
+  // When set, the form PATCHes this URL instead of the brand-rep endpoints.
+  adminEndpoint?: string;
+  // Global tax defaults (admin mode) — shown as placeholders for the per-product
+  // override fields and used to preview the final price.
+  taxDefaults?: TaxDefaults;
 }
 
-export function ProductForm({ open, onOpenChange, categories, product, onSaved }: ProductFormProps) {
+export function ProductForm({ open, onOpenChange, categories, product, onSaved, adminEndpoint, taxDefaults }: ProductFormProps) {
   const isEdit = Boolean(product);
+  const isAdmin = Boolean(adminEndpoint);
+  // Reps can't change price on edit; the admin can edit anything.
+  const priceLocked = isEdit && !isAdmin;
   // Basic
   const [name, setName] = useState(product?.name ?? "");
   const [sku, setSku] = useState(product?.sku ?? "");
   const [categoryIds, setCategoryIds] = useState<string[]>(product?.categoryIds ?? []);
   const [shortDescription, setShortDescription] = useState(product?.shortDescription ?? "");
   const [fullDescription, setFullDescription] = useState(product?.fullDescription ?? "");
-  // Pricing & inventory (price is read-only in edit mode)
-  const [price, setPrice] = useState(product ? String(product.price) : "");
-  const [compareAtPrice, setCompareAtPrice] = useState(product?.compareAtPrice != null ? String(product.compareAtPrice) : "");
-  const [costPrice, setCostPrice] = useState(product?.costPrice != null ? String(product.costPrice) : "");
+  // Pricing & inventory — reps set only the wholesale price (locked on edit).
+  // Compare-at and cost price are not collected from brand reps.
+  // In admin mode `price` is treated as the WHOLESALE (pre-tax) base.
+  const [price, setPrice] = useState(
+    product ? String(product.wholesalePrice ?? product.price) : "",
+  );
+  // Per-product overrides (admin). "" => use the global default / weight lookup.
+  const [profitPct, setProfitPct] = useState(product?.profitPct != null ? String(product.profitPct) : "");
+  const [tariffPct, setTariffPct] = useState(product?.tariffPct != null ? String(product.tariffPct) : "");
+  const [shippingCostOverride, setShippingCostOverride] = useState(
+    product?.shippingCostOverride != null ? String(product.shippingCostOverride) : "",
+  );
   const [stockStatus, setStockStatus] = useState<"IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK">(product?.stockStatus ?? "IN_STOCK");
   const [totalStock, setTotalStock] = useState(product ? String(product.totalStock) : "");
   const [isFeatured, setIsFeatured] = useState(product?.isFeatured ?? false);
@@ -223,7 +262,7 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved }
     if (sku.trim().length < 2) return "SKU is required.";
     if (!categoryIds.length) return "Select at least one category.";
     if (fullDescription.trim().length < 10) return "Full description is required.";
-    if (!isEdit && (!price || Number(price) < 0)) return "Valid price is required.";
+    if (!priceLocked && (!price || Number(price) < 0)) return "Valid price is required.";
     if (totalStock === "" || Number(totalStock) < 0) return "Total stock is required.";
     if (!images.length) return "Upload at least one image.";
     if (!variants.length) return "Add at least one variant.";
@@ -247,8 +286,8 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved }
       const payload = {
         name, sku, shortDescription: shortDescription || fullDescription.slice(0, 160), fullDescription,
         categoryIds, price: Number(price),
-        compareAtPrice: compareAtPrice ? Number(compareAtPrice) : null,
-        costPrice: costPrice ? Number(costPrice) : null,
+        compareAtPrice: null,
+        costPrice: null,
         stockStatus, totalStock: Number(totalStock), isFeatured, isPublished,
         seoTitle, seoDescription, images,
         variants: variants.map((v) => ({
@@ -263,14 +302,27 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved }
           weight: Number(weight), dimensionL: Number(dimL), dimensionW: Number(dimW),
           dimensionH: Number(dimH), shippingClass,
         },
+        // Per-product overrides ("" => null => use global / weight lookup). Admin-only.
+        profitPct: profitPct === "" ? null : Number(profitPct),
+        tariffPct: tariffPct === "" ? null : Number(tariffPct),
+        shippingCostOverride: shippingCostOverride === "" ? null : Number(shippingCostOverride),
       };
-      const res = await fetch(
-        isEdit ? `/api/products/${product!.id}` : "/api/products",
-        { method: isEdit ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
-      );
+      const url = isAdmin ? adminEndpoint! : isEdit ? `/api/products/${product!.id}` : "/api/products";
+      const method = isAdmin || isEdit ? "PATCH" : "POST";
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
       const data = await res.json();
       if (!res.ok || !data.ok) { toast.error(data.message ?? "Failed to save product."); return; }
-      toast.success(isEdit ? "Product updated." : "Product created.");
+      toast.success(
+        isAdmin
+          ? "Product updated."
+          : isEdit
+            ? "Product updated — resubmitted for admin approval."
+            : "Product submitted for admin approval.",
+      );
       onOpenChange(false);
       onSaved();
     } catch {
@@ -288,7 +340,11 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved }
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit Product" : "Add New Product"}</DialogTitle>
           <DialogDescription>
-            {isEdit ? "Update product details. Price is locked." : "All fields are required."}
+            {isAdmin
+              ? "Edit any field before approving. Changes are saved to the product."
+              : isEdit
+                ? "Update product details. Price is locked."
+                : "All fields are required."}
           </DialogDescription>
         </DialogHeader>
 
@@ -331,20 +387,14 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved }
           <section className="space-y-4">
             <h3 className={sectionTitle}>Pricing &amp; Inventory</h3>
             <div className="grid gap-4 sm:grid-cols-3">
-              <Field label={isEdit ? "Price (Rs) — locked" : "Price (Rs)"} required={!isEdit}>
+              <Field label={priceLocked ? "Wholesale Price (Rs) — locked" : "Wholesale Price (Rs)"} required={!priceLocked}>
                 <Input
                   type="number" min="0" step="0.01" value={price}
                   onChange={(e) => setPrice(e.target.value)}
                   placeholder="0.00"
-                  disabled={isEdit}
-                  title={isEdit ? "Price can't be changed when editing." : undefined}
+                  disabled={priceLocked}
+                  title={priceLocked ? "Price can't be changed when editing." : undefined}
                 />
-              </Field>
-              <Field label="Compare at Price (Rs)">
-                <Input type="number" min="0" step="0.01" value={compareAtPrice} onChange={(e) => setCompareAtPrice(e.target.value)} placeholder="0.00" />
-              </Field>
-              <Field label="Cost Price (Rs)">
-                <Input type="number" min="0" step="0.01" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} placeholder="0.00" />
               </Field>
             </div>
             <div className="grid gap-4 sm:grid-cols-3">
@@ -375,6 +425,18 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved }
               <Checkbox checked={isFeatured} onCheckedChange={(c) => setIsFeatured(Boolean(c))} /> Featured product
             </label>
           </section>
+
+          {/* SHIPPING & TAXES (admin only) */}
+          {isAdmin && taxDefaults && (
+            <TaxSection
+              wholesale={Number(price) || 0}
+              weight={Number(weight) || 0}
+              defaults={taxDefaults}
+              profitPct={profitPct} setProfitPct={setProfitPct}
+              tariffPct={tariffPct} setTariffPct={setTariffPct}
+              shippingCostOverride={shippingCostOverride} setShippingCostOverride={setShippingCostOverride}
+            />
+          )}
 
           {/* VARIANTS */}
           <section className="space-y-4">
@@ -536,5 +598,84 @@ function Field({ label, required, children }: { label: string; required?: boolea
       <Label>{label} {required ? <span className="text-rose-500">*</span> : null}</Label>
       {children}
     </div>
+  );
+}
+
+// Admin-only: per-product overrides + live final-price preview.
+// Blank input => use the global default / weight-based lookup (shown as placeholder).
+//   final = wholesale × (1 + (profit% + tariff%)/100) + shippingCost
+function TaxSection({
+  wholesale,
+  weight,
+  defaults,
+  profitPct, setProfitPct,
+  tariffPct, setTariffPct,
+  shippingCostOverride, setShippingCostOverride,
+}: {
+  wholesale: number;
+  weight: number;
+  defaults: TaxDefaults;
+  profitPct: string; setProfitPct: (v: string) => void;
+  tariffPct: string; setTariffPct: (v: string) => void;
+  shippingCostOverride: string; setShippingCostOverride: (v: string) => void;
+}) {
+  const eff = (val: string, def: number) => (val === "" ? def : Number(val) || 0);
+  const p = eff(profitPct, defaults.profitPct);
+  const t = eff(tariffPct, defaults.tariffPct);
+  const totalPct = p + t;
+
+  // Per-kg shipping: weight × (special bracket rate if matched, else general).
+  const bracket = defaults.shippingBrackets.find(
+    (b) => weight >= b.minKg && (b.maxKg == null || weight <= b.maxKg),
+  );
+  const rate = bracket ? bracket.ratePerKg : defaults.shippingPerKg;
+  const weightCost = Math.round(weight * rate * 100) / 100;
+  const shippingCost = shippingCostOverride === "" ? weightCost : Number(shippingCostOverride) || 0;
+
+  const finalPrice = Math.round((wholesale * (1 + totalPct / 100) + shippingCost) * 100) / 100;
+
+  return (
+    <section className="space-y-4">
+      <h3 className="border-b pb-2 text-lg font-semibold">Shipping &amp; Taxes</h3>
+      <p className="text-sm text-slate-500">
+        Leave a field blank to use the global default (shown as the placeholder). Shipping is based
+        on this product&apos;s weight ({weight} kg); set a custom cost to override the weight rate.
+      </p>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Field label="Profit %">
+          <Input type="number" min="0" step="0.01" value={profitPct}
+            onChange={(e) => setProfitPct(e.target.value)} placeholder={`Default ${defaults.profitPct}%`} />
+        </Field>
+        <Field label="Tariffs %">
+          <Input type="number" min="0" step="0.01" value={tariffPct}
+            onChange={(e) => setTariffPct(e.target.value)} placeholder={`Default ${defaults.tariffPct}%`} />
+        </Field>
+        <Field label="Shipping cost (Rs)">
+          <Input type="number" min="0" step="0.01" value={shippingCostOverride}
+            onChange={(e) => setShippingCostOverride(e.target.value)}
+            placeholder={`Weight cost ${weightCost}`} />
+        </Field>
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-800 dark:bg-slate-900/60">
+        <div className="flex items-center justify-between">
+          <span className="text-slate-500">Wholesale price</span>
+          <span className="font-medium">{formatCurrency(wholesale)}</span>
+        </div>
+        <div className="mt-1 flex items-center justify-between">
+          <span className="text-slate-500">Taxes ({p}% + {t}% = {totalPct}%)</span>
+          <span className="font-medium">+ {formatCurrency((wholesale * totalPct) / 100)}</span>
+        </div>
+        <div className="mt-1 flex items-center justify-between">
+          <span className="text-slate-500">
+            Shipping{shippingCostOverride === "" ? ` (${weight}kg × ${formatCurrency(rate)}/kg)` : " (override)"}
+          </span>
+          <span className="font-medium">+ {formatCurrency(shippingCost)}</span>
+        </div>
+        <div className="mt-2 flex items-center justify-between border-t border-slate-200 pt-2 dark:border-slate-700">
+          <span className="font-semibold">Final price (applied on approve)</span>
+          <span className="text-base font-semibold">{formatCurrency(finalPrice)}</span>
+        </div>
+      </div>
+    </section>
   );
 }

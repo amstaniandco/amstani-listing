@@ -12,6 +12,7 @@ export default async function ProfilePage() {
   const navItems: NavItem[] = isAdmin
     ? [
         { label: "Dashboard", href: "/admin/dashboard", icon: "admin" },
+        { label: "Shipping & Taxes", href: "/admin/taxes", icon: "taxes" },
         { label: "Profile", href: "/profile", icon: "profile" },
       ]
     : [

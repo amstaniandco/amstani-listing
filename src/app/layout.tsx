@@ -18,6 +18,11 @@ const ibmPlexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "Amstani Portal",
   description: "Premium multi-role portal for admins and brands.",
+  icons: {
+    icon: "/Amstani.png",
+    shortcut: "/Amstani.png",
+    apple: "/Amstani.png",
+  },
 };
 
 export default function RootLayout({

@@ -5,7 +5,14 @@
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { ProductRow } from "@/types/db";
+import {
+  computeFinalPrice,
+  getTaxSettings,
+  listShippingRates,
+  resolveRates,
+  resolveShippingCost,
+} from "@/lib/data/tax";
+import type { ApprovalStatus, ProductRow } from "@/types/db";
 
 export interface ProductListItem {
   id: string;
@@ -19,6 +26,8 @@ export interface ProductListItem {
   brandName: string | null;
   categoryNames: string[];
   totalStock: number;
+  approvalStatus: ApprovalStatus;
+  rejectReason: string | null;
 }
 
 export interface ProductDetail extends ProductListItem {
@@ -59,6 +68,14 @@ export interface ShippingInput {
   dimensionH?: number | null;
   shippingClass?: string | null;
 }
+// Resolved (read) shape: every field present and normalized to value|null.
+export interface ShippingDetail {
+  weight: number | null;
+  dimensionL: number | null;
+  dimensionW: number | null;
+  dimensionH: number | null;
+  shippingClass: string | null;
+}
 export interface FullProductInput {
   name: string;
   sku: string;
@@ -79,6 +96,11 @@ export interface FullProductInput {
   variants: VariantInput[];
   sizeCharts: SizeChartRowInput[];
   shipping: ShippingInput;
+  // Admin-only per-product overrides (null/undefined => use global / weight lookup).
+  profitPct?: number | null;
+  tariffPct?: number | null;
+  shipmentPct?: number | null; // legacy, ignored
+  shippingCostOverride?: number | null;
 }
 
 function slugify(s: string): string {
@@ -96,7 +118,7 @@ export async function listProductsForBrand(brandId: string): Promise<ProductList
   const { data, error } = await db
     .from("product")
     .select(
-      "id,name,sku,price,isPublished,mainImage,createdAt,totalStock," +
+      "id,name,sku,price,isPublished,mainImage,createdAt,totalStock,approvalStatus,rejectReason," +
         "brand(name),product_category(categoryId,category(name))",
     )
     .eq("brandId", brandId)
@@ -119,16 +141,35 @@ export async function listProductsForBrand(brandId: string): Promise<ProductList
     brandName: p.brand?.name ?? null,
     categoryIds: (p.product_category ?? []).map((c) => c.categoryId),
     categoryNames: (p.product_category ?? []).map((c) => c.category?.name ?? "").filter(Boolean),
+    approvalStatus: p.approvalStatus ?? "APPROVED",
+    rejectReason: p.rejectReason ?? null,
   }));
 }
 
 // ---- toggle published (enable/disable), brand-scoped --------------------
+// A rep can only enable a product the admin has APPROVED. Disabling is always
+// allowed (it just hides an already-listed product).
 export async function setProductPublished(
   productId: string,
   brandId: string,
   isPublished: boolean,
 ): Promise<void> {
   const db = createAdminClient();
+
+  if (isPublished) {
+    const { data: row, error: sErr } = await db
+      .from("product")
+      .select("approvalStatus")
+      .eq("id", productId)
+      .eq("brandId", brandId)
+      .maybeSingle();
+    if (sErr) throw new Error(sErr.message);
+    if (!row) throw new Error("Product not found for this brand.");
+    if ((row as { approvalStatus: ApprovalStatus }).approvalStatus !== "APPROVED") {
+      throw new Error("This product is awaiting admin approval and can't be published yet.");
+    }
+  }
+
   const { error } = await db
     .from("product")
     .update({ isPublished, updatedAt: new Date().toISOString() } as never)
@@ -156,7 +197,9 @@ export async function listAllProducts(limit = 200): Promise<AdminProductItem[]> 
   const db = createAdminClient();
   const { data, error } = await db
     .from("product")
-    .select("id,name,sku,price,isPublished,mainImage,createdAt,totalStock,brandId,brand(name)")
+    .select(
+      "id,name,sku,price,isPublished,mainImage,createdAt,totalStock,approvalStatus,rejectReason,brandId,brand(name)",
+    )
     .order("createdAt", { ascending: false })
     .limit(limit);
   if (error) throw new Error(error.message);
@@ -175,7 +218,116 @@ export async function listAllProducts(limit = 200): Promise<AdminProductItem[]> 
     totalStock: p.totalStock ?? 0,
     brandId: p.brandId,
     brandName: p.brand?.name ?? null,
+    approvalStatus: p.approvalStatus ?? "APPROVED",
+    rejectReason: p.rejectReason ?? null,
   }));
+}
+
+// ---- ADMIN: count + list of products awaiting approval ------------------
+export async function countPendingProducts(): Promise<number> {
+  const db = createAdminClient();
+  const { count, error } = await db
+    .from("product")
+    .select("id", { count: "exact", head: true })
+    .eq("approvalStatus", "PENDING");
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
+// Full pending-product detail for the admin review queue. Reuses the full
+// detail shape (all 6 tables) so the admin sees EVERYTHING before approving.
+export interface AdminPendingProduct extends FullProductDetail {
+  approvalStatus: ApprovalStatus;
+  rejectReason: string | null;
+  submittedAt: string | null;
+}
+
+export async function listPendingProductsForAdmin(): Promise<AdminPendingProduct[]> {
+  const db = createAdminClient();
+  const { data, error } = await db
+    .from("product")
+    .select(
+      "*,brand(name)," +
+        "product_category(categoryId,category(name))," +
+        "product_images(imageUrl,isMain,sortOrder)," +
+        "product_variant(size,color,stockQuantity,skuVariant,priceOverride,isCustomSize)," +
+        "size_chart(size,unit,measurements)," +
+        "shipping_info(weight,dimensionL,dimensionW,dimensionH,shippingClass)",
+    )
+    .eq("approvalStatus", "PENDING")
+    .order("submittedAt", { ascending: true });
+  if (error) throw new Error(error.message);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ((data as any[]) ?? []).map((p) => mapFullDetail(p, {
+    approvalStatus: p.approvalStatus ?? "PENDING",
+    rejectReason: p.rejectReason ?? null,
+    submittedAt: p.submittedAt ?? null,
+  }));
+}
+
+// ---- ADMIN: approve / reject a product ----------------------------------
+// Approving applies the effective tax rates (per-product overrides, else the
+// global tax_settings) to the WHOLESALE base and overwrites product.price with
+// the final after-tax price. The wholesale base is preserved in wholesalePrice
+// so re-approval recomputes from the base instead of double-taxing.
+export async function approveProduct(productId: string, reviewerId: string): Promise<void> {
+  const db = createAdminClient();
+  const now = new Date().toISOString();
+
+  const { data: row, error: rErr } = await db
+    .from("product")
+    .select("price,wholesalePrice,profitPct,tariffPct,shippingCostOverride,shipping_info(weight)")
+    .eq("id", productId)
+    .maybeSingle();
+  if (rErr) throw new Error(rErr.message);
+  if (!row) throw new Error("Product not found.");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const p = row as any;
+  const weight = Array.isArray(p.shipping_info)
+    ? p.shipping_info[0]?.weight ?? null
+    : p.shipping_info?.weight ?? null;
+
+  // Base = stored wholesale if present, else the current price (first approval).
+  const wholesale = p.wholesalePrice ?? p.price;
+  const [global, brackets] = await Promise.all([getTaxSettings(), listShippingRates()]);
+  const rates = resolveRates(global, { profitPct: p.profitPct, tariffPct: p.tariffPct });
+  const shippingCost = resolveShippingCost(weight, global.shippingPerKg, brackets, p.shippingCostOverride);
+  const finalPrice = computeFinalPrice(wholesale, rates, shippingCost);
+
+  const { error } = await db
+    .from("product")
+    .update({
+      approvalStatus: "APPROVED",
+      rejectReason: null,
+      reviewedBy: reviewerId,
+      reviewedAt: now,
+      wholesalePrice: wholesale, // lock in the base
+      price: finalPrice, // live store shows the after-tax price
+      updatedAt: now,
+    } as never)
+    .eq("id", productId);
+  if (error) throw new Error(error.message);
+}
+
+// Rejecting also force-unpublishes, so a rejected product can never be live.
+export async function rejectProduct(
+  productId: string,
+  reviewerId: string,
+  reason?: string,
+): Promise<void> {
+  const db = createAdminClient();
+  const { error } = await db
+    .from("product")
+    .update({
+      approvalStatus: "REJECTED",
+      rejectReason: reason ?? null,
+      isPublished: false,
+      reviewedBy: reviewerId,
+      reviewedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as never)
+    .eq("id", productId);
+  if (error) throw new Error(error.message);
 }
 
 // Admin delete: not brand-scoped.
@@ -196,7 +348,7 @@ export async function getProductForBrand(
   const { data, error } = await db
     .from("product")
     .select(
-      "id,name,sku,slug,price,isPublished,mainImage,fullDescription,brandId,createdAt," +
+      "id,name,sku,slug,price,isPublished,mainImage,fullDescription,brandId,createdAt,approvalStatus,rejectReason," +
         "product_category(categoryId),product_images(id,imageUrl,isMain,sortOrder)",
     )
     .eq("id", productId)
@@ -224,6 +376,8 @@ export async function getProductForBrand(
     categoryNames: [],
     totalStock: 0,
     brandName: null,
+    approvalStatus: p.approvalStatus ?? "APPROVED",
+    rejectReason: p.rejectReason ?? null,
     images: p.product_images ?? [],
   };
 }
@@ -252,7 +406,13 @@ export interface FullProductDetail {
   images: string[];
   variants: VariantInput[];
   sizeCharts: SizeChartRowInput[];
-  shipping: ShippingInput;
+  shipping: ShippingDetail;
+  // Per-product tax overrides (null => use global tax_settings) + wholesale base.
+  profitPct: number | null;
+  tariffPct: number | null;
+  shipmentPct: number | null; // legacy
+  shippingCostOverride: number | null; // null => weight-bracket lookup
+  wholesalePrice: number | null;
 }
 
 export async function getFullProductForBrand(
@@ -275,9 +435,16 @@ export async function getFullProductForBrand(
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return null;
+  return mapFullDetail(data);
+}
 
+// Shared mapper: a joined product row (all 6 tables) -> FullProductDetail.
+// `extra` lets callers graft on additional fields (e.g. admin approval status).
+function mapFullDetail<T extends object = object>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const p = data as any;
+  p: any,
+  extra?: T,
+): FullProductDetail & T {
   const images = (p.product_images ?? [])
     .slice()
     .sort((a: { sortOrder: number }, b: { sortOrder: number }) => a.sortOrder - b.sortOrder)
@@ -321,6 +488,12 @@ export async function getFullProductForBrand(
           shippingClass: shipping.shippingClass ?? null,
         }
       : { weight: null, dimensionL: null, dimensionW: null, dimensionH: null, shippingClass: null },
+    profitPct: p.profitPct ?? null,
+    tariffPct: p.tariffPct ?? null,
+    shipmentPct: p.shipmentPct ?? null,
+    shippingCostOverride: p.shippingCostOverride ?? null,
+    wholesalePrice: p.wholesalePrice ?? null,
+    ...(extra ?? ({} as T)),
   };
 }
 
@@ -341,6 +514,9 @@ export async function updateFullProductForBrand(
 
   // NOTE: price and compareAtPrice/costPrice are intentionally omitted from the
   // update — reps cannot change pricing on edit.
+  //
+  // Any edit by a rep re-enters the approval queue (re-moderation) and is pulled
+  // off the live store until re-approved — the admin must see the new details.
   const { error } = await db
     .from("product")
     .update({
@@ -351,7 +527,12 @@ export async function updateFullProductForBrand(
       stockStatus: input.stockStatus,
       totalStock: input.totalStock,
       isFeatured: input.isFeatured,
-      isPublished: input.isPublished,
+      isPublished: false,
+      approvalStatus: "PENDING",
+      rejectReason: null,
+      reviewedBy: null,
+      reviewedAt: null,
+      submittedAt: now,
       seoTitle: input.seoTitle ?? null,
       seoDescription: input.seoDescription ?? null,
       mainImage: input.images[0] ?? null,
@@ -366,6 +547,84 @@ export async function updateFullProductForBrand(
   await replaceVariants(productId, input.variants);
   await replaceSizeCharts(productId, input.sizeCharts);
   await replaceShipping(productId, input.shipping);
+}
+
+// ---- ADMIN FULL UPDATE (all tables, all brands) -------------------------
+// The admin can correct/complete a product while reviewing it: any field,
+// including PRICE, plus variants / size charts / images / shipping. Unlike the
+// rep path this is NOT brand-scoped and it does NOT change approvalStatus or
+// unpublish — the admin's edits are part of the review, so the product stays in
+// whatever state it was in (typically PENDING) until the admin clicks Approve.
+export async function updateFullProductAsAdmin(
+  productId: string,
+  input: FullProductInput,
+): Promise<void> {
+  const db = createAdminClient();
+  const now = new Date().toISOString();
+
+  const { data: existing, error: eErr } = await db
+    .from("product").select("id").eq("id", productId).maybeSingle();
+  if (eErr) throw new Error(eErr.message);
+  if (!existing) throw new Error("Product not found.");
+
+  const { error } = await db
+    .from("product")
+    .update({
+      name: input.name,
+      sku: input.sku,
+      shortDescription: input.shortDescription,
+      fullDescription: input.fullDescription,
+      // The admin's price input is the WHOLESALE base (pre-tax). The after-tax
+      // final is applied to `price` only on approve, so keep both in sync here.
+      price: input.price,
+      wholesalePrice: input.price,
+      compareAtPrice: input.compareAtPrice ?? null,
+      costPrice: input.costPrice ?? null,
+      stockStatus: input.stockStatus,
+      totalStock: input.totalStock,
+      isFeatured: input.isFeatured,
+      isPublished: input.isPublished,
+      seoTitle: input.seoTitle ?? null,
+      seoDescription: input.seoDescription ?? null,
+      mainImage: input.images[0] ?? null,
+      // Per-product overrides (null => use global rates / weight-bracket lookup).
+      profitPct: input.profitPct ?? null,
+      tariffPct: input.tariffPct ?? null,
+      shippingCostOverride: input.shippingCostOverride ?? null,
+      updatedAt: now,
+      // approvalStatus / reviewedBy / submittedAt deliberately untouched.
+    } as never)
+    .eq("id", productId);
+  if (error) throw new Error(error.message);
+
+  await replaceCategories(productId, input.categoryIds, now);
+  await replaceImages(productId, input.images, now);
+  await replaceVariants(productId, input.variants);
+  await replaceSizeCharts(productId, input.sizeCharts);
+  await replaceShipping(productId, input.shipping);
+}
+
+// Admin: full detail for ANY product (not brand-scoped) — used to load a
+// pending product into the editor.
+export async function getFullProductAsAdmin(
+  productId: string,
+): Promise<FullProductDetail | null> {
+  const db = createAdminClient();
+  const { data, error } = await db
+    .from("product")
+    .select(
+      "*,brand(name)," +
+        "product_category(categoryId,category(name))," +
+        "product_images(imageUrl,isMain,sortOrder)," +
+        "product_variant(size,color,stockQuantity,skuVariant,priceOverride,isCustomSize)," +
+        "size_chart(size,unit,measurements)," +
+        "shipping_info(weight,dimensionL,dimensionW,dimensionH,shippingClass)",
+    )
+    .eq("id", productId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return mapFullDetail(data);
 }
 
 // ---- CREATE --------------------------------------------------------------
@@ -386,12 +645,17 @@ export async function createProductForBrand(
     shortDescription: input.description.slice(0, 160),
     fullDescription: input.description,
     price: input.price,
+    wholesalePrice: input.price,
     stockStatus: "IN_STOCK",
     totalStock: 0,
     isFeatured: false,
     isPublished: input.isPublished,
     mainImage,
     brandId,
+    // New portal products await admin approval before they can go live.
+    approvalStatus: "PENDING",
+    rejectReason: null,
+    submittedAt: now,
     createdAt: now,
     updatedAt: now,
   } as never);
@@ -419,6 +683,7 @@ export async function createFullProductForBrand(
     shortDescription: input.shortDescription,
     fullDescription: input.fullDescription,
     price: input.price,
+    wholesalePrice: input.price,
     compareAtPrice: input.compareAtPrice ?? null,
     costPrice: input.costPrice ?? null,
     stockStatus: input.stockStatus,
@@ -429,6 +694,10 @@ export async function createFullProductForBrand(
     seoDescription: input.seoDescription ?? null,
     mainImage: input.images[0] ?? null,
     brandId,
+    // New portal products await admin approval before they can go live.
+    approvalStatus: "PENDING",
+    rejectReason: null,
+    submittedAt: now,
     createdAt: now,
     updatedAt: now,
   } as never);
@@ -503,6 +772,7 @@ export async function updateProductForBrand(
   const existing = await getProductForBrand(productId, brandId);
   if (!existing) throw new Error("Product not found for this brand.");
 
+  // Any edit re-enters the approval queue (see updateFullProductForBrand).
   const { error } = await db
     .from("product")
     .update({
@@ -511,7 +781,13 @@ export async function updateProductForBrand(
       shortDescription: input.description.slice(0, 160),
       fullDescription: input.description,
       price: input.price,
-      isPublished: input.isPublished,
+      wholesalePrice: input.price,
+      isPublished: false,
+      approvalStatus: "PENDING",
+      rejectReason: null,
+      reviewedBy: null,
+      reviewedAt: null,
+      submittedAt: now,
       mainImage: input.images[0] ?? null,
       updatedAt: now,
     } as never)

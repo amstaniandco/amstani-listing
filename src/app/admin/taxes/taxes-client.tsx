@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import { Percent, Plus, Save, Trash2 } from "lucide-react";
+import { Lock, Percent, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DashboardShell, type NavItem, type ShellUser } from "@/components/shared/dashboard-shell";
@@ -18,6 +18,29 @@ const navItems: NavItem[] = [
   { label: "Shipping & Taxes", href: "/admin/taxes", icon: "taxes" },
   { label: "Profile", href: "/profile", icon: "profile" },
 ];
+
+// Soft PIN gate for this page. NOTE: client-side only — it hides the UI from
+// casual access; the data is still admin-auth-protected server-side. Unlock
+// persists for the browser-tab session.
+const PAGE_PIN = "9644";
+const UNLOCK_KEY = "amstani_taxes_unlocked";
+
+// Tiny external store over sessionStorage so the unlock flag reads cleanly with
+// useSyncExternalStore (server snapshot = locked; no hydration mismatch).
+const unlockStore = {
+  listeners: new Set<() => void>(),
+  subscribe(cb: () => void) {
+    unlockStore.listeners.add(cb);
+    return () => unlockStore.listeners.delete(cb);
+  },
+  isUnlocked() {
+    return typeof window !== "undefined" && sessionStorage.getItem(UNLOCK_KEY) === "1";
+  },
+  unlock() {
+    sessionStorage.setItem(UNLOCK_KEY, "1");
+    unlockStore.listeners.forEach((cb) => cb());
+  },
+};
 
 interface TaxSettings {
   profitPct: number;
@@ -48,6 +71,26 @@ export function TaxSettingsClient({
   initialBrackets: Bracket[];
 }) {
   const router = useRouter();
+
+  // PIN gate. Server snapshot is always locked (false) so SSR and the first
+  // client render match; the real per-tab unlock state is read on the client.
+  const unlocked = useSyncExternalStore(
+    unlockStore.subscribe,
+    unlockStore.isUnlocked,
+    () => false,
+  );
+  const [pin, setPin] = useState("");
+
+  function submitPin() {
+    if (pin === PAGE_PIN) {
+      unlockStore.unlock();
+      setPin("");
+    } else {
+      toast.error("Incorrect PIN.");
+      setPin("");
+    }
+  }
+
   const [profit, setProfit] = useState(String(initialSettings.profitPct));
   const [tariff, setTariff] = useState(String(initialSettings.tariffPct));
   const [perKg, setPerKg] = useState(String(initialSettings.shippingPerKg));
@@ -128,6 +171,44 @@ export function TaxSettingsClient({
     } finally {
       setSavingRates(false);
     }
+  }
+
+  if (!unlocked) {
+    return (
+      <DashboardShell
+        title="Shipping & Taxes"
+        description="Enter the PIN to manage shipping & tax settings."
+        navItems={navItems}
+        user={shell}
+      >
+        <Card className="mx-auto max-w-sm border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-slate-950/80">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Lock className="h-4 w-4" /> Locked
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              This page is protected. Enter the PIN to continue.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="taxes-pin">PIN</Label>
+              <Input
+                id="taxes-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") submitPin(); }}
+                placeholder="••••"
+              />
+            </div>
+            <Button onClick={submitPin} disabled={!pin}>Unlock</Button>
+          </CardContent>
+        </Card>
+      </DashboardShell>
+    );
   }
 
   return (

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Plus, Trash2, Upload } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Loader2, Lock, Plus, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,30 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { formatCurrency } from "@/lib/format";
+
+// Soft PIN gate for the admin Shipping & Taxes section of this form. Client-side
+// only — it hides the pricing/override UI from casual access; the data is still
+// admin-auth-protected server-side. Unlock persists for the browser-tab session
+// (separate key from the Shipping & Taxes page so each is gated independently).
+const TAX_SECTION_PIN = "9644";
+const TAX_SECTION_UNLOCK_KEY = "amstani_product_taxes_unlocked";
+
+// Tiny external store over sessionStorage so the unlock flag reads cleanly with
+// useSyncExternalStore (server snapshot = locked; no hydration mismatch).
+const taxUnlockStore = {
+  listeners: new Set<() => void>(),
+  subscribe(cb: () => void) {
+    taxUnlockStore.listeners.add(cb);
+    return () => taxUnlockStore.listeners.delete(cb);
+  },
+  isUnlocked() {
+    return typeof window !== "undefined" && sessionStorage.getItem(TAX_SECTION_UNLOCK_KEY) === "1";
+  },
+  unlock() {
+    sessionStorage.setItem(TAX_SECTION_UNLOCK_KEY, "1");
+    taxUnlockStore.listeners.forEach((cb) => cb());
+  },
+};
 
 export interface CategoryOption {
   id: string;
@@ -148,7 +172,6 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
   const [uploading, setUploading] = useState(false);
   // Shipping
   const [weight, setWeight] = useState(product?.shipping.weight != null ? String(product.shipping.weight) : "");
-  const [shippingClass, setShippingClass] = useState(product?.shipping.shippingClass ?? "");
   const [dimL, setDimL] = useState(product?.shipping.dimensionL != null ? String(product.shipping.dimensionL) : "");
   const [dimW, setDimW] = useState(product?.shipping.dimensionW != null ? String(product.shipping.dimensionW) : "");
   const [dimH, setDimH] = useState(product?.shipping.dimensionH != null ? String(product.shipping.dimensionH) : "");
@@ -271,8 +294,7 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
     }
     if (!sizeChart.length) return "Add at least one size chart row.";
     if (!weight || Number(weight) < 0) return "Weight is required.";
-    if (!shippingClass.trim()) return "Shipping class is required.";
-    if (!dimL || !dimW || !dimH) return "Dimensions (L × W × H) are required.";
+    // Dimensions are optional — a product can be saved without L × W × H.
     if (!seoTitle.trim()) return "SEO title is required.";
     if (!seoDescription.trim()) return "SEO description is required.";
     return null;
@@ -299,8 +321,12 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
           measurements: Object.fromEntries(variableNames.map((n) => [n, r.measurements[n] ?? ""])),
         })),
         shipping: {
-          weight: Number(weight), dimensionL: Number(dimL), dimensionW: Number(dimW),
-          dimensionH: Number(dimH), shippingClass,
+          weight: Number(weight),
+          // Dimensions are optional — send null when left blank.
+          dimensionL: dimL === "" ? null : Number(dimL),
+          dimensionW: dimW === "" ? null : Number(dimW),
+          dimensionH: dimH === "" ? null : Number(dimH),
+          shippingClass: null,
         },
         // Per-product overrides ("" => null => use global / weight lookup). Admin-only.
         profitPct: profitPct === "" ? null : Number(profitPct),
@@ -561,9 +587,8 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
             <h3 className={sectionTitle}>Shipping Information</h3>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Weight (kg)" required><Input type="number" min="0" step="0.01" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="0.5" /></Field>
-              <Field label="Shipping Class" required><Input value={shippingClass} onChange={(e) => setShippingClass(e.target.value)} placeholder="Standard" /></Field>
             </div>
-            <Field label="Dimensions (L × W × H in cm)" required>
+            <Field label="Dimensions (L × W × H in cm) — optional">
               <div className="grid grid-cols-3 gap-2">
                 <Input type="number" min="0" value={dimL} onChange={(e) => setDimL(e.target.value)} placeholder="Length" />
                 <Input type="number" min="0" value={dimW} onChange={(e) => setDimW(e.target.value)} placeholder="Width" />
@@ -619,6 +644,57 @@ function TaxSection({
   tariffPct: string; setTariffPct: (v: string) => void;
   shippingCostOverride: string; setShippingCostOverride: (v: string) => void;
 }) {
+  // PIN gate. Server snapshot is always locked (false) so SSR and the first
+  // client render match; the real per-tab unlock state is read on the client.
+  const unlocked = useSyncExternalStore(
+    taxUnlockStore.subscribe,
+    taxUnlockStore.isUnlocked,
+    () => false,
+  );
+  const [pin, setPin] = useState("");
+
+  function submitPin() {
+    if (pin === TAX_SECTION_PIN) {
+      taxUnlockStore.unlock();
+      setPin("");
+    } else {
+      toast.error("Incorrect PIN.");
+      setPin("");
+    }
+  }
+
+  if (!unlocked) {
+    return (
+      <section className="space-y-4">
+        <h3 className="border-b pb-2 text-lg font-semibold">Shipping &amp; Taxes</h3>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/60">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Lock className="h-4 w-4" /> Locked
+          </div>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Pricing &amp; taxes are protected. Enter the PIN to view and edit this section.
+          </p>
+          <div className="mt-3 flex max-w-xs items-end gap-2">
+            <div className="flex-1 space-y-1.5">
+              <Label htmlFor="product-taxes-pin">PIN</Label>
+              <Input
+                id="product-taxes-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submitPin(); } }}
+                placeholder="••••"
+              />
+            </div>
+            <Button type="button" onClick={submitPin} disabled={!pin}>Unlock</Button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   const eff = (val: string, def: number) => (val === "" ? def : Number(val) || 0);
   const p = eff(profitPct, defaults.profitPct);
   const t = eff(tariffPct, defaults.tariffPct);

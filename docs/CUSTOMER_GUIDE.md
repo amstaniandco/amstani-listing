@@ -209,7 +209,7 @@ The form is organized into sections. Here's every field, top to bottom.
 
 | Field | What to enter | Notes |
 |---|---|---|
-| **Wholesale Price (Rs)** | Your wholesale price, e.g., *0.00* | Required. **This locks after creation — you can't change it when editing.** Set it carefully. |
+| **Wholesale Price (Rs)** | Your wholesale price, e.g., *0.00* | Required. You can change it later by editing the product (editing resends it for admin approval). |
 | **Stock Status** | *In stock* / *Low stock* / *Out of stock* | Required |
 | **Total Stock** | Total units available, e.g., *0* | Required, 0 or more |
 | **Visibility** | *Published* or *Draft* | Defaults to *Published* — but a product only actually goes live after admin approval (see below) |
@@ -217,8 +217,8 @@ The form is organized into sections. Here's every field, top to bottom.
 
 > **About price:** You set the *wholesale* price. After approval, the admin applies tax
 > and shipping to calculate the final retail price. You won't see or set those admin
-> overrides, and **you can't edit the price once the product is created** — so double-check
-> it before submitting.
+> overrides. You **can** change the wholesale price later by editing the product — but any
+> edit resends it for admin approval, so it'll need to be re-approved before it's live again.
 
 ### Variants (at least one required)
 
@@ -279,7 +279,7 @@ you enable it.
 - [ ] Product name (3+ chars) and SKU (2+ chars)
 - [ ] At least one category ticked
 - [ ] Full description (10+ chars)
-- [ ] Wholesale price set correctly (you can't change it later)
+- [ ] Wholesale price set (you can edit it later, but that resends it for approval)
 - [ ] Total stock entered
 - [ ] At least one variant with size, color, and variant SKU
 - [ ] At least one size-chart row
@@ -328,9 +328,9 @@ Use the **search box** to filter by product **name** or **SKU**.
 ### Actions on each product
 
 - **View** — Opens a read-only view of all the product's details.
-- **Edit** — Opens the **"Edit Product"** dialog. *"Update product details. Price is
-  locked."*
-  - The **price field is locked** — you cannot change it.
+- **Edit** — Opens the **"Edit Product"** dialog. *"Update product details. Editing
+  resubmits the product for approval."*
+  - You **can** update the **wholesale price** here (along with the other fields).
   - Saving **resubmits the product for approval** (it returns to PENDING and un-publishes).
   - You'll see *"Product updated — resubmitted for admin approval."*
   - For a rejected product, this button reads **"Edit & resubmit."**
@@ -374,7 +374,7 @@ your session is cleared.
 ### ✅ You CAN
 
 - Create products (each goes to the admin for approval)
-- Edit your own products (resubmits them for approval)
+- Edit your own products, **including the wholesale price** (resubmits them for approval)
 - Delete your own products (permanent)
 - Enable / disable your **approved** products (control store visibility)
 - See each product's approval status and any rejection reason
@@ -389,7 +389,6 @@ your session is cleared.
 - Create a brand (you select an existing one at signup)
 - Create categories directly (you can only **request** them)
 - Approve or reject products (only admins can)
-- **Change a product's price after creating it** (price is locked on edit)
 - See or set admin tax/shipping overrides
 - See or manage another brand's products
 - Access any admin pages
@@ -437,8 +436,9 @@ A: That's expected. Every edit sends the product back to the admin for re-review
 temporarily un-publishes it.
 
 **Q: I entered the wrong price. Can I fix it?**
-A: Not by editing — the price is **locked** after creation. Contact your admin, or (if
-acceptable) delete the product and create a new one with the correct price.
+A: Yes. Open the product, click **Edit**, update the **Wholesale Price**, and save. Like any
+edit, this resubmits the product for admin approval, so it returns to PENDING until the admin
+re-approves it.
 
 **Q: My product was rejected. What now?**
 A: Read the rejection reason shown on the product, click **"Edit & resubmit,"** fix the

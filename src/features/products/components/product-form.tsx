@@ -46,11 +46,19 @@ interface SizeVariable {
   name: string;
   label: string;
 }
+// How a variant's size is entered:
+//   none   -> color-only product, no size at all
+//   preset -> pick from the standard S/M/L… list
+//   custom -> free-text size (e.g. "35cm", "One Size")
+type SizeType = "none" | "preset" | "custom";
 interface VariantRow {
+  sizeType: SizeType;
   size: string;
   color: string;
   stockQuantity: string;
   skuVariant: string;
+  priceOverride: string; // "" => use the product's base price
+  attributes: Record<string, string>;
 }
 interface SizeChartRow {
   size: string;
@@ -58,7 +66,15 @@ interface SizeChartRow {
   measurements: Record<string, string>;
 }
 
-const SIZE_OPTIONS = ["XS", "S", "M", "L", "XL", "XXL", "Custom"];
+const SIZE_OPTIONS = ["XS", "S", "M", "L", "XL", "XXL"];
+const PRESET_SET = new Set(SIZE_OPTIONS);
+
+// Derive the size-type of an existing variant when loading a product for edit.
+function inferSizeType(size: string, isCustomSize?: boolean): SizeType {
+  if (!size) return "none";
+  if (isCustomSize) return "custom";
+  return PRESET_SET.has(size) ? "preset" : "custom";
+}
 
 export interface EditProduct {
   id: string;
@@ -77,7 +93,10 @@ export interface EditProduct {
   seoDescription: string | null;
   categoryIds: string[];
   images: string[];
-  variants: { size: string; color: string; stockQuantity: number; skuVariant: string }[];
+  variants: {
+    size: string; color: string; stockQuantity: number; skuVariant: string;
+    priceOverride?: number | null; isCustomSize?: boolean; attributes?: Record<string, string>;
+  }[];
   sizeCharts: { size: string; unit: "cm" | "in"; measurements: Record<string, string> }[];
   shipping: {
     weight: number | null; dimensionL: number | null; dimensionW: number | null;
@@ -124,15 +143,13 @@ interface ProductFormProps {
 export function ProductForm({ open, onOpenChange, categories, product, onSaved, adminEndpoint, taxDefaults }: ProductFormProps) {
   const isEdit = Boolean(product);
   const isAdmin = Boolean(adminEndpoint);
-  // Reps can't change price on edit; the admin can edit anything.
-  const priceLocked = isEdit && !isAdmin;
   // Basic
   const [name, setName] = useState(product?.name ?? "");
   const [sku, setSku] = useState(product?.sku ?? "");
   const [categoryIds, setCategoryIds] = useState<string[]>(product?.categoryIds ?? []);
   const [shortDescription, setShortDescription] = useState(product?.shortDescription ?? "");
   const [fullDescription, setFullDescription] = useState(product?.fullDescription ?? "");
-  // Pricing & inventory — reps set only the wholesale price (locked on edit).
+  // Pricing & inventory — reps set the wholesale price (editable on edit too).
   // Compare-at and cost price are not collected from brand reps.
   // In admin mode `price` is treated as the WHOLESALE (pre-tax) base.
   const [price, setPrice] = useState(
@@ -151,9 +168,26 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
   // Variants
   const [variants, setVariants] = useState<VariantRow[]>(
     product?.variants.length
-      ? product.variants.map((v) => ({ size: v.size, color: v.color, stockQuantity: String(v.stockQuantity), skuVariant: v.skuVariant }))
-      : [{ size: "M", color: "", stockQuantity: "0", skuVariant: "" }],
+      ? product.variants.map((v) => ({
+          sizeType: inferSizeType(v.size, v.isCustomSize),
+          size: v.size, color: v.color, stockQuantity: String(v.stockQuantity), skuVariant: v.skuVariant,
+          priceOverride: v.priceOverride != null ? String(v.priceOverride) : "",
+          attributes: { ...(v.attributes ?? {}) },
+        }))
+      : [{ sizeType: "none" as SizeType, size: "", color: "", stockQuantity: "0", skuVariant: "", priceOverride: "", attributes: {} }],
   );
+  // Extra per-variant attribute columns (beyond size/color/stock/SKU), e.g. for
+  // shoes: width, material. Managed like the size-chart variables. Seeded from
+  // the existing variants' attribute keys in edit mode.
+  const [showVariantVariables, setShowVariantVariables] = useState(false);
+  const [variantVariables, setVariantVariables] = useState<SizeVariable[]>(() => {
+    if (!product?.variants.length) return [];
+    const names = new Set<string>();
+    product.variants.forEach((v) => Object.keys(v.attributes ?? {}).forEach((k) => names.add(k)));
+    return [...names].map((n) => ({ name: n, label: n.charAt(0).toUpperCase() + n.slice(1) }));
+  });
+  const [newVariantVarName, setNewVariantVarName] = useState("");
+  const [newVariantVarLabel, setNewVariantVarLabel] = useState("");
   // Size chart
   const [showVariables, setShowVariables] = useState(false);
   const [sizeVariables, setSizeVariables] = useState<SizeVariable[]>(() => {
@@ -221,13 +255,41 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
 
   // ---- variants
   function addVariant() {
-    setVariants((v) => [...v, { size: "M", color: "", stockQuantity: "0", skuVariant: "" }]);
+    setVariants((v) => [...v, { sizeType: "none", size: "", color: "", stockQuantity: "0", skuVariant: "", priceOverride: "", attributes: {} }]);
   }
   function updateVariant(i: number, patch: Partial<VariantRow>) {
     setVariants((v) => v.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
   }
+  // Switching size type clears the size value (preset uses the list, custom is
+  // free text, none has no size). Default a preset to "M" so the select isn't empty.
+  function updateVariantSizeType(i: number, sizeType: SizeType) {
+    setVariants((v) => v.map((row, idx) =>
+      idx === i ? { ...row, sizeType, size: sizeType === "preset" ? "M" : "" } : row,
+    ));
+  }
   function removeVariant(i: number) {
     setVariants((v) => v.filter((_, idx) => idx !== i));
+  }
+  function updateVariantAttr(i: number, varName: string, value: string) {
+    setVariants((v) => v.map((row, idx) =>
+      idx === i ? { ...row, attributes: { ...row.attributes, [varName]: value } } : row,
+    ));
+  }
+
+  // ---- variant variables (extra per-variant attribute columns)
+  const variantVarNames = useMemo(() => variantVariables.map((v) => v.name), [variantVariables]);
+  function addVariantVariable() {
+    const n = newVariantVarName.trim().toLowerCase().replace(/\s+/g, "_");
+    if (!n) return;
+    if (variantVariables.some((v) => v.name === n)) { toast.error("Variable already exists."); return; }
+    setVariantVariables((vs) => [...vs, { name: n, label: newVariantVarLabel.trim() || newVariantVarName.trim() }]);
+    setNewVariantVarName(""); setNewVariantVarLabel("");
+  }
+  function removeVariantVariable(name: string) {
+    setVariantVariables((vs) => vs.filter((v) => v.name !== name));
+    setVariants((rows) => rows.map((r) => {
+      const a = { ...r.attributes }; delete a[name]; return { ...r, attributes: a };
+    }));
   }
 
   // ---- size variables
@@ -285,12 +347,13 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
     if (sku.trim().length < 2) return "SKU is required.";
     if (!categoryIds.length) return "Select at least one category.";
     if (fullDescription.trim().length < 10) return "Full description is required.";
-    if (!priceLocked && (!price || Number(price) < 0)) return "Valid price is required.";
+    if (!price || Number(price) < 0) return "Valid price is required.";
     if (totalStock === "" || Number(totalStock) < 0) return "Total stock is required.";
     if (!images.length) return "Upload at least one image.";
     if (!variants.length) return "Add at least one variant.";
     for (const v of variants) {
-      if (!v.size || !v.color.trim() || !v.skuVariant.trim()) return "Each variant needs size, color, and SKU.";
+      if (!v.skuVariant.trim()) return "Each variant needs a Variant SKU.";
+      if (v.sizeType !== "none" && !v.size.trim()) return "Enter a size, or set Size Type to “No Size”.";
     }
     if (!sizeChart.length) return "Add at least one size chart row.";
     if (!weight || Number(weight) < 0) return "Weight is required.";
@@ -313,8 +376,14 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
         stockStatus, totalStock: Number(totalStock), isFeatured, isPublished,
         seoTitle, seoDescription, images,
         variants: variants.map((v) => ({
-          size: v.size, color: v.color, stockQuantity: Number(v.stockQuantity || 0), skuVariant: v.skuVariant,
-          isCustomSize: v.size === "Custom",
+          size: v.sizeType === "none" ? "" : v.size.trim(),
+          color: v.color.trim(),
+          stockQuantity: Number(v.stockQuantity || 0),
+          skuVariant: v.skuVariant.trim(),
+          priceOverride: v.priceOverride === "" ? null : Number(v.priceOverride),
+          isCustomSize: v.sizeType === "custom",
+          // Only send the managed variable keys (drop any stale ones).
+          attributes: Object.fromEntries(variantVarNames.map((n) => [n, v.attributes[n] ?? ""])),
         })),
         sizeCharts: sizeChart.map((r) => ({
           size: r.size, unit: r.unit,
@@ -369,7 +438,7 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
             {isAdmin
               ? "Edit any field before approving. Changes are saved to the product."
               : isEdit
-                ? "Update product details. Price is locked."
+                ? "Update product details. Editing resubmits the product for approval."
                 : "All fields are required."}
           </DialogDescription>
         </DialogHeader>
@@ -413,13 +482,11 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
           <section className="space-y-4">
             <h3 className={sectionTitle}>Pricing &amp; Inventory</h3>
             <div className="grid gap-4 sm:grid-cols-3">
-              <Field label={priceLocked ? "Wholesale Price (Rs) — locked" : "Wholesale Price (Rs)"} required={!priceLocked}>
+              <Field label="Wholesale Price (Rs)" required>
                 <Input
                   type="number" min="0" step="0.01" value={price}
                   onChange={(e) => setPrice(e.target.value)}
                   placeholder="0.00"
-                  disabled={priceLocked}
-                  title={priceLocked ? "Price can't be changed when editing." : undefined}
                 />
               </Field>
             </div>
@@ -468,21 +535,93 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
           <section className="space-y-4">
             <div className="flex items-center justify-between border-b pb-2">
               <h3 className="text-lg font-semibold">Variants</h3>
-              <Button type="button" size="sm" onClick={addVariant}><Plus className="mr-1 h-4 w-4" /> Add Variant</Button>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => setShowVariantVariables((s) => !s)}>
+                  {showVariantVariables ? "Hide Variables" : "Manage Variables"}
+                </Button>
+                <Button type="button" size="sm" onClick={addVariant}><Plus className="mr-1 h-4 w-4" /> Add Variant</Button>
+              </div>
             </div>
-            <div className="space-y-2">
+
+            {showVariantVariables && (
+              <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-medium">Manage Variant Attributes for This Product</p>
+                <p className="text-xs text-slate-500">
+                  Add extra columns each variant can fill in (e.g. <em>width</em>, <em>material</em>, <em>heel height</em>).
+                  Changes here only affect this product.
+                </p>
+                <div className="flex gap-2">
+                  <Input value={newVariantVarName} onChange={(e) => setNewVariantVarName(e.target.value)} placeholder="Attribute name (e.g., width)" />
+                  <Input value={newVariantVarLabel} onChange={(e) => setNewVariantVarLabel(e.target.value)} placeholder="Display label (e.g., Width)" />
+                  <Button type="button" onClick={addVariantVariable}>Add</Button>
+                </div>
+                {variantVariables.map((v) => (
+                  <div key={v.name} className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <span className="text-sm font-medium">{v.label} <span className="text-slate-400">({v.name})</span></span>
+                    <Button type="button" size="sm" variant="ghost" className="text-rose-600" onClick={() => removeVariantVariable(v.name)}>Delete</Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="space-y-3">
               {variants.map((v, i) => (
-                <div key={i} className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] items-end gap-2">
-                  <Field label="Size">
-                    <Select value={v.size} onValueChange={(val) => updateVariant(i, { size: val })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>{SIZE_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                    </Select>
-                  </Field>
-                  <Field label="Color"><Input value={v.color} onChange={(e) => updateVariant(i, { color: e.target.value })} placeholder="Pink" /></Field>
-                  <Field label="Stock"><Input type="number" min="0" value={v.stockQuantity} onChange={(e) => updateVariant(i, { stockQuantity: e.target.value })} /></Field>
-                  <Field label="Variant SKU"><Input value={v.skuVariant} onChange={(e) => updateVariant(i, { skuVariant: e.target.value })} placeholder="SKU-S-PINK" /></Field>
-                  <Button type="button" variant="ghost" className="text-rose-600" onClick={() => removeVariant(i)}><Trash2 className="h-4 w-4" /></Button>
+                <div key={i} className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/40">
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                    <Field label="Size Type">
+                      <Select value={v.sizeType} onValueChange={(val) => updateVariantSizeType(i, val as SizeType)}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">No Size (Color Only)</SelectItem>
+                          <SelectItem value="preset">Preset (S, M, L…)</SelectItem>
+                          <SelectItem value="custom">Custom Size</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="Size">
+                      {v.sizeType === "preset" ? (
+                        <Select value={v.size} onValueChange={(val) => updateVariant(i, { size: val })}>
+                          <SelectTrigger><SelectValue placeholder="Select size" /></SelectTrigger>
+                          <SelectContent>{SIZE_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          value={v.size}
+                          onChange={(e) => updateVariant(i, { size: e.target.value })}
+                          placeholder={v.sizeType === "none" ? "Not needed for this product" : "e.g. 35cm, One Size"}
+                          disabled={v.sizeType === "none"}
+                        />
+                      )}
+                    </Field>
+                    <Field label="Color (optional)"><Input value={v.color} onChange={(e) => updateVariant(i, { color: e.target.value })} placeholder="Red" /></Field>
+                    <Field label="Stock"><Input type="number" min="0" value={v.stockQuantity} onChange={(e) => updateVariant(i, { stockQuantity: e.target.value })} placeholder="0" /></Field>
+                    <Field label="Variant SKU" required><Input value={v.skuVariant} onChange={(e) => updateVariant(i, { skuVariant: e.target.value })} placeholder="SKU" /></Field>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <Field label="Price Override (Rs)">
+                      <Input
+                        type="number" min="0" step="0.01" value={v.priceOverride}
+                        onChange={(e) => updateVariant(i, { priceOverride: e.target.value })}
+                        placeholder={`Leave empty to use base price${price ? ` (${price})` : ""}`}
+                      />
+                    </Field>
+                    {variantVariables.map((vv) => (
+                      <Field key={vv.name} label={vv.label}>
+                        <Input
+                          value={v.attributes[vv.name] ?? ""}
+                          onChange={(e) => updateVariantAttr(i, vv.name, e.target.value)}
+                          placeholder={vv.label}
+                        />
+                      </Field>
+                    ))}
+                  </div>
+
+                  <div className="flex justify-end">
+                    <Button type="button" variant="ghost" size="sm" className="text-rose-600" onClick={() => removeVariant(i)}>
+                      <Trash2 className="mr-1 h-4 w-4" /> Remove Variant
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

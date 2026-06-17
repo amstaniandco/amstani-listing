@@ -11,6 +11,9 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatDate } from "@/lib/format";
@@ -56,6 +59,14 @@ const approvalVariant: Record<ApprovalStatus, "warning" | "success" | "danger"> 
   PENDING: "warning",
   APPROVED: "success",
   REJECTED: "danger",
+  CHANGES_REQUESTED: "warning",
+};
+
+const approvalLabel: Record<ApprovalStatus, string> = {
+  PENDING: "Pending",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+  CHANGES_REQUESTED: "Changes requested",
 };
 
 const navItems: NavItem[] = [
@@ -103,6 +114,9 @@ export function AdminDashboardClient({
   const [viewOpen, setViewOpen] = useState(false);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [approveItem, setApproveItem] = useState<PendingProductItem | null>(null);
+  // "Request changes" dialog: which product, and the note the admin writes.
+  const [changesId, setChangesId] = useState<string | null>(null);
+  const [changesNote, setChangesNote] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   // Admin product editor.
   const [editing, setEditing] = useState<EditProduct | null>(null);
@@ -135,7 +149,7 @@ export function AdminDashboardClient({
   const pendingUsers = users.filter((u) => u.status === "PENDING").length;
   const pendingReqs = requests.filter((r) => r.status === "PENDING").length;
 
-  async function reviewProduct(id: string, action: "approve" | "reject", reason?: string) {
+  async function reviewProduct(id: string, action: "approve" | "reject" | "request_changes", reason?: string) {
     setBusyId(id);
     try {
       const res = await fetch(`/api/admin/products/${id}/review`, {
@@ -153,7 +167,13 @@ export function AdminDashboardClient({
       setProducts((prev) =>
         prev.map((p) => (p.id === id ? { ...p, approvalStatus: data.approvalStatus } : p)),
       );
-      toast.success(action === "approve" ? "Product approved and listed." : "Product rejected.");
+      toast.success(
+        action === "approve"
+          ? "Product approved and listed."
+          : action === "request_changes"
+            ? "Sent back to the brand for changes."
+            : "Product rejected.",
+      );
       router.refresh();
     } finally {
       setBusyId(null);
@@ -403,6 +423,15 @@ export function AdminDashboardClient({
                               <Button
                                 size="sm"
                                 variant="outline"
+                                className="text-amber-600"
+                                disabled={busyId === p.id}
+                                onClick={() => { setChangesId(p.id); setChangesNote(""); }}
+                              >
+                                Request changes
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
                                 className="text-rose-600"
                                 disabled={busyId === p.id}
                                 onClick={() => setRejectId(p.id)}
@@ -446,7 +475,7 @@ export function AdminDashboardClient({
                           <TableCell>{p.brandName ?? "—"}</TableCell>
                           <TableCell>{p.sku}</TableCell>
                           <TableCell>{formatCurrency(p.price)}</TableCell>
-                          <TableCell><Badge variant={approvalVariant[p.approvalStatus]}>{p.approvalStatus}</Badge></TableCell>
+                          <TableCell><Badge variant={approvalVariant[p.approvalStatus]}>{approvalLabel[p.approvalStatus]}</Badge></TableCell>
                           <TableCell><Badge variant={p.isPublished ? "success" : "secondary"}>{p.isPublished ? "Published" : "Draft"}</Badge></TableCell>
                           <TableCell>
                             <div className="flex justify-end">
@@ -509,6 +538,40 @@ export function AdminDashboardClient({
           setRejectId(null);
         }}
       />
+
+      {/* Request changes — send the product back to the brand with a note. */}
+      <Dialog open={Boolean(changesId)} onOpenChange={(open) => !open && setChangesId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send back for changes?</DialogTitle>
+            <DialogDescription>
+              The product is returned to the brand so they can edit and resubmit it — no need to recreate it.
+              It won&apos;t appear on the live store until it&apos;s approved.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="changes-note">What should the brand change?</Label>
+            <Textarea
+              id="changes-note"
+              rows={4}
+              value={changesNote}
+              onChange={(e) => setChangesNote(e.target.value)}
+              placeholder="e.g. Please add a clearer main image and fix the size chart units."
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setChangesId(null)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (changesId) reviewProduct(changesId, "request_changes", changesNote.trim() || undefined);
+                setChangesId(null);
+              }}
+            >
+              Send back for changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardShell>
   );
 }

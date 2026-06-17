@@ -61,19 +61,40 @@ export function ProductView({ open, onOpenChange, product }: ProductViewProps) {
 
             {/* variants */}
             <Section title={`Variants (${product.variants.length})`}>
-              {product.variants.length === 0 ? <p className="text-slate-500">None</p> : (
-                <table className="w-full text-left">
-                  <thead><tr className="text-slate-500"><th className="py-1 pr-3">Size</th><th className="py-1 pr-3">Color</th><th className="py-1 pr-3">Stock</th><th className="py-1">SKU</th></tr></thead>
-                  <tbody>
-                    {product.variants.map((v, i) => (
-                      <tr key={i} className="border-t border-slate-100">
-                        <td className="py-1 pr-3">{v.size}</td><td className="py-1 pr-3">{v.color}</td>
-                        <td className="py-1 pr-3">{v.stockQuantity}</td><td className="py-1">{v.skuVariant}</td>
+              {product.variants.length === 0 ? <p className="text-slate-500">None</p> : (() => {
+                // Union of all extra attribute keys across the variants -> dynamic columns.
+                const attrKeys = Array.from(
+                  new Set(product.variants.flatMap((v) => Object.keys(v.attributes ?? {}))),
+                );
+                return (
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="text-slate-500">
+                        <th className="py-1 pr-3">Size</th>
+                        <th className="py-1 pr-3">Color</th>
+                        <th className="py-1 pr-3">Stock</th>
+                        <th className="py-1 pr-3">SKU</th>
+                        <th className="py-1 pr-3">Price</th>
+                        {attrKeys.map((k) => (
+                          <th key={k} className="py-1 pr-3 capitalize">{k.replace(/_/g, " ")}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+                    </thead>
+                    <tbody>
+                      {product.variants.map((v, i) => (
+                        <tr key={i} className="border-t border-slate-100">
+                          <td className="py-1 pr-3">{v.size || "—"}</td><td className="py-1 pr-3">{v.color || "—"}</td>
+                          <td className="py-1 pr-3">{v.stockQuantity}</td><td className="py-1 pr-3">{v.skuVariant}</td>
+                          <td className="py-1 pr-3">{v.priceOverride != null ? formatCurrency(v.priceOverride) : "Base"}</td>
+                          {attrKeys.map((k) => (
+                            <td key={k} className="py-1 pr-3">{v.attributes?.[k] || "—"}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                );
+              })()}
             </Section>
 
             {/* size chart */}

@@ -8,28 +8,31 @@ import {
   updateFullProductForBrand,
 } from "@/lib/data/products";
 
+// Only the variant SKU is required; size/color/stock are optional.
 const variantSchema = z.object({
-  size: z.string().min(1),
-  color: z.string().min(1),
-  stockQuantity: z.coerce.number().min(0),
+  size: z.string().optional().default(""),
+  color: z.string().optional().default(""),
+  stockQuantity: z.coerce.number().min(0).optional().default(0),
   skuVariant: z.string().min(1),
   priceOverride: z.coerce.number().min(0).nullable().optional(),
   isCustomSize: z.boolean().optional(),
+  // Free-form per-variant attributes keyed by variable name.
+  attributes: z.record(z.string(), z.string()).optional(),
 });
 const sizeChartSchema = z.object({
   size: z.string().min(1),
   unit: z.enum(["cm", "in"]),
   measurements: z.record(z.string(), z.string()),
 });
-// price/compareAtPrice/costPrice are accepted but ignored by the update (reps
-// cannot change pricing). They're optional here so the client can send them.
+// Reps may now set the wholesale price on edit. compareAtPrice/costPrice are
+// still admin-only and ignored here.
 const updateSchema = z.object({
   name: z.string().min(3),
   sku: z.string().min(2),
   shortDescription: z.string().min(1),
   fullDescription: z.string().min(10),
   categoryIds: z.array(z.string()).min(1),
-  price: z.coerce.number().min(0).optional(),
+  price: z.coerce.number().min(0),
   compareAtPrice: z.coerce.number().min(0).nullable().optional(),
   costPrice: z.coerce.number().min(0).nullable().optional(),
   stockStatus: z.enum(["IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK"]),
@@ -89,10 +92,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     );
   }
   try {
-    // price-related fields are dropped server-side; pass 0 placeholders.
+    // Rep sets the wholesale price; compareAtPrice/costPrice stay admin-only.
     await updateFullProductForBrand(id, user.brandId!, {
       ...parsed.data,
-      price: 0,
       compareAtPrice: null,
       costPrice: null,
     });

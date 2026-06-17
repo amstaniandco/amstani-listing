@@ -55,6 +55,9 @@ export interface VariantInput {
   skuVariant: string;
   priceOverride?: number | null;
   isCustomSize?: boolean;
+  // Free-form attributes keyed by variable name (e.g. width, material). Optional;
+  // defaults to {} when absent.
+  attributes?: Record<string, string>;
 }
 export interface SizeChartRowInput {
   size: string;
@@ -250,7 +253,7 @@ export async function listPendingProductsForAdmin(): Promise<AdminPendingProduct
       "*,brand(name)," +
         "product_category(categoryId,category(name))," +
         "product_images(imageUrl,isMain,sortOrder)," +
-        "product_variant(size,color,stockQuantity,skuVariant,priceOverride,isCustomSize)," +
+        "product_variant(size,color,stockQuantity,skuVariant,priceOverride,isCustomSize,attributes)," +
         "size_chart(size,unit,measurements)," +
         "shipping_info(weight,dimensionL,dimensionW,dimensionH,shippingClass)",
     )
@@ -325,6 +328,31 @@ export async function rejectProduct(
       reviewedBy: reviewerId,
       reviewedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+    } as never)
+    .eq("id", productId);
+  if (error) throw new Error(error.message);
+}
+
+// "Request changes": send the product back to the rep with a note (reused
+// rejectReason column) instead of rejecting it. Force-unpublishes so it can't be
+// live while awaiting the rep's edits. The rep edits & resubmits the same row,
+// which flips it back to PENDING (see updateFullProductForBrand).
+export async function requestProductChanges(
+  productId: string,
+  reviewerId: string,
+  note?: string,
+): Promise<void> {
+  const db = createAdminClient();
+  const now = new Date().toISOString();
+  const { error } = await db
+    .from("product")
+    .update({
+      approvalStatus: "CHANGES_REQUESTED",
+      rejectReason: note ?? null, // reused as the "what to change" message
+      isPublished: false,
+      reviewedBy: reviewerId,
+      reviewedAt: now,
+      updatedAt: now,
     } as never)
     .eq("id", productId);
   if (error) throw new Error(error.message);
@@ -426,7 +454,7 @@ export async function getFullProductForBrand(
       "*,brand(name)," +
         "product_category(categoryId,category(name))," +
         "product_images(imageUrl,isMain,sortOrder)," +
-        "product_variant(size,color,stockQuantity,skuVariant,priceOverride,isCustomSize)," +
+        "product_variant(size,color,stockQuantity,skuVariant,priceOverride,isCustomSize,attributes)," +
         "size_chart(size,unit,measurements)," +
         "shipping_info(weight,dimensionL,dimensionW,dimensionH,shippingClass)",
     )
@@ -477,6 +505,7 @@ function mapFullDetail<T extends object = object>(
     variants: (p.product_variant ?? []).map((v: VariantInput) => ({
       size: v.size, color: v.color ?? "", stockQuantity: v.stockQuantity ?? 0,
       skuVariant: v.skuVariant, priceOverride: v.priceOverride ?? null, isCustomSize: v.isCustomSize ?? false,
+      attributes: v.attributes ?? {},
     })),
     sizeCharts: (p.size_chart ?? []).map((s: SizeChartRowInput) => ({
       size: s.size, unit: s.unit, measurements: s.measurements ?? {},
@@ -512,8 +541,10 @@ export async function updateFullProductForBrand(
   if (oErr) throw new Error(oErr.message);
   if (!owned) throw new Error("Product not found for this brand.");
 
-  // NOTE: price and compareAtPrice/costPrice are intentionally omitted from the
-  // update — reps cannot change pricing on edit.
+  // The rep's price input is the WHOLESALE (pre-tax) base. We store it in both
+  // price and wholesalePrice; the after-tax final is recomputed from the
+  // wholesale base when the admin re-approves (see approveProduct).
+  // compareAtPrice/costPrice remain admin-only and are not touched here.
   //
   // Any edit by a rep re-enters the approval queue (re-moderation) and is pulled
   // off the live store until re-approved — the admin must see the new details.
@@ -524,6 +555,8 @@ export async function updateFullProductForBrand(
       sku: input.sku,
       shortDescription: input.shortDescription,
       fullDescription: input.fullDescription,
+      price: input.price,
+      wholesalePrice: input.price,
       stockStatus: input.stockStatus,
       totalStock: input.totalStock,
       isFeatured: input.isFeatured,
@@ -616,7 +649,7 @@ export async function getFullProductAsAdmin(
       "*,brand(name)," +
         "product_category(categoryId,category(name))," +
         "product_images(imageUrl,isMain,sortOrder)," +
-        "product_variant(size,color,stockQuantity,skuVariant,priceOverride,isCustomSize)," +
+        "product_variant(size,color,stockQuantity,skuVariant,priceOverride,isCustomSize,attributes)," +
         "size_chart(size,unit,measurements)," +
         "shipping_info(weight,dimensionL,dimensionW,dimensionH,shippingClass)",
     )
@@ -725,6 +758,7 @@ async function replaceVariants(productId: string, variants: VariantInput[]) {
     skuVariant: v.skuVariant,
     priceOverride: v.priceOverride ?? null,
     isCustomSize: v.isCustomSize ?? false,
+    attributes: v.attributes ?? {},
   }));
   const { error } = await db.from("product_variant").insert(rows as never);
   if (error) throw new Error(error.message);

@@ -28,7 +28,7 @@ interface ProductListItem {
   brandName: string | null;
   categoryNames: string[];
   totalStock: number;
-  approvalStatus: "PENDING" | "APPROVED" | "REJECTED";
+  approvalStatus: "PENDING" | "APPROVED" | "REJECTED" | "CHANGES_REQUESTED";
   rejectReason: string | null;
 }
 
@@ -36,12 +36,14 @@ const approvalVariant: Record<ProductListItem["approvalStatus"], "warning" | "su
   PENDING: "warning",
   APPROVED: "success",
   REJECTED: "danger",
+  CHANGES_REQUESTED: "warning",
 };
 
 const approvalLabel: Record<ProductListItem["approvalStatus"], string> = {
   PENDING: "Awaiting approval",
   APPROVED: "Approved",
   REJECTED: "Rejected",
+  CHANGES_REQUESTED: "Changes requested",
 };
 
 const navItems: NavItem[] = [
@@ -208,8 +210,11 @@ export function BrandProductsClient({
                         <Badge variant={approvalVariant[p.approvalStatus]}>
                           {approvalLabel[p.approvalStatus]}
                         </Badge>
-                        {p.approvalStatus === "REJECTED" && p.rejectReason ? (
-                          <p className="mt-1 max-w-[14rem] text-xs text-rose-600" title={p.rejectReason}>
+                        {(p.approvalStatus === "REJECTED" || p.approvalStatus === "CHANGES_REQUESTED") && p.rejectReason ? (
+                          <p
+                            className={`mt-1 max-w-[14rem] text-xs ${p.approvalStatus === "REJECTED" ? "text-rose-600" : "text-amber-600"}`}
+                            title={p.rejectReason}
+                          >
                             {p.rejectReason}
                           </p>
                         ) : null}
@@ -225,7 +230,7 @@ export function BrandProductsClient({
                             <ScanEye className="mr-2 h-4 w-4" /> View
                           </Button>
                           <Button variant="outline" size="sm" disabled={busyId === p.id} onClick={() => openEdit(p.id)}>
-                            <Pencil className="mr-2 h-4 w-4" /> {p.approvalStatus === "REJECTED" ? "Edit & resubmit" : "Edit"}
+                            <Pencil className="mr-2 h-4 w-4" /> {p.approvalStatus === "REJECTED" || p.approvalStatus === "CHANGES_REQUESTED" ? "Edit & resubmit" : "Edit"}
                           </Button>
                           <Button
                             variant="outline"

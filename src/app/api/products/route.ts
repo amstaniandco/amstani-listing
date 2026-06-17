@@ -4,13 +4,17 @@ import { z } from "zod";
 import { requireBrandRep } from "@/lib/auth/current-user";
 import { createFullProductForBrand, listProductsForBrand } from "@/lib/data/products";
 
+// Only the variant SKU is required; size/color/stock are optional (a product can
+// be color-only or have no size at all).
 const variantSchema = z.object({
-  size: z.string().min(1),
-  color: z.string().min(1),
-  stockQuantity: z.coerce.number().min(0),
+  size: z.string().optional().default(""),
+  color: z.string().optional().default(""),
+  stockQuantity: z.coerce.number().min(0).optional().default(0),
   skuVariant: z.string().min(1),
   priceOverride: z.coerce.number().min(0).nullable().optional(),
   isCustomSize: z.boolean().optional(),
+  // Free-form per-variant attributes keyed by variable name.
+  attributes: z.record(z.string(), z.string()).optional(),
 });
 
 const sizeChartSchema = z.object({

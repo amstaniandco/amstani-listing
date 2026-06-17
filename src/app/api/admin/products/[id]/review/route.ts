@@ -2,16 +2,17 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireAdmin } from "@/lib/auth/current-user";
-import { approveProduct, rejectProduct } from "@/lib/data/products";
+import { approveProduct, rejectProduct, requestProductChanges } from "@/lib/data/products";
 
 const bodySchema = z.object({
-  action: z.enum(["approve", "reject"]),
+  action: z.enum(["approve", "reject", "request_changes"]),
   reason: z.string().optional(),
 });
 
-// Admin approves or rejects a brand rep's pending product.
-// Approve -> product becomes APPROVED (eligible to be listed on the live store).
-// Reject  -> product becomes REJECTED + reason, and is force-unpublished.
+// Admin approves, rejects, or requests changes on a brand rep's pending product.
+// Approve         -> APPROVED (eligible to be listed on the live store).
+// Reject          -> REJECTED + reason, force-unpublished.
+// Request changes -> CHANGES_REQUESTED + note, force-unpublished (rep edits & resubmits).
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   let admin;
   try {
@@ -35,6 +36,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (parsed.data.action === "approve") {
       await approveProduct(id, admin.sub);
       return NextResponse.json({ ok: true, approvalStatus: "APPROVED" });
+    }
+    if (parsed.data.action === "request_changes") {
+      await requestProductChanges(id, admin.sub, parsed.data.reason);
+      return NextResponse.json({ ok: true, approvalStatus: "CHANGES_REQUESTED" });
     }
     await rejectProduct(id, admin.sub, parsed.data.reason);
     return NextResponse.json({ ok: true, approvalStatus: "REJECTED" });

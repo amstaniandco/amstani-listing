@@ -11,7 +11,9 @@ export type Role = "USER" | "ADMIN" | "BRAND_REP";
 export type UserStatus = "PENDING" | "APPROVED" | "BLOCKED";
 export type StockStatus = "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK"; // adjust if MAIN's enum differs
 export type CategoryRequestStatus = "PENDING" | "APPROVED" | "REJECTED";
-export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED"; // product moderation, added by main_0005
+// product moderation. PENDING/APPROVED/REJECTED added by main_0005;
+// CHANGES_REQUESTED ("sent back to rep for edits") added by main_0010.
+export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED" | "CHANGES_REQUESTED";
 
 export interface UserRow {
   id: string;
@@ -138,6 +140,9 @@ export interface ProductVariantRow {
   skuVariant: string;
   priceOverride: number | null;
   isCustomSize: boolean;
+  // Free-form per-variant attributes (e.g. width, material, heel height) keyed by
+  // variable name. JSON column, mirrors size_chart.measurements. Added by main_0009.
+  attributes: Record<string, string>;
 }
 
 export interface SizeChartRow {

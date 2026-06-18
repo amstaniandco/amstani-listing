@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatPkr } from "@/lib/format";
 
 // Soft PIN gate for the admin Shipping & Taxes section of this form. Client-side
 // only — it hides the pricing/override UI from casual access; the data is still
@@ -138,9 +138,13 @@ interface ProductFormProps {
   // Global tax defaults (admin mode) — shown as placeholders for the per-product
   // override fields and used to preview the final price.
   taxDefaults?: TaxDefaults;
+  // Live PKR -> USD rate (admin mode). The rep enters the wholesale price in PKR;
+  // the tax preview and the approved store price are in USD. Defaults to 1 so
+  // non-admin/edit paths (which never show the tax preview) are unaffected.
+  usdPerPkr?: number;
 }
 
-export function ProductForm({ open, onOpenChange, categories, product, onSaved, adminEndpoint, taxDefaults }: ProductFormProps) {
+export function ProductForm({ open, onOpenChange, categories, product, onSaved, adminEndpoint, taxDefaults, usdPerPkr = 1 }: ProductFormProps) {
   const isEdit = Boolean(product);
   const isAdmin = Boolean(adminEndpoint);
   // Basic
@@ -522,7 +526,8 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
           {/* SHIPPING & TAXES (admin only) */}
           {isAdmin && taxDefaults && (
             <TaxSection
-              wholesale={Number(price) || 0}
+              wholesalePkr={Number(price) || 0}
+              usdPerPkr={usdPerPkr}
               weight={Number(weight) || 0}
               defaults={taxDefaults}
               profitPct={profitPct} setProfitPct={setProfitPct}
@@ -769,16 +774,19 @@ function Field({ label, required, children }: { label: string; required?: boolea
 
 // Admin-only: per-product overrides + live final-price preview.
 // Blank input => use the global default / weight-based lookup (shown as placeholder).
-//   final = wholesale × (1 + (profit% + tariff%)/100) + shippingCost
+// The rep enters the wholesale in PKR; we convert to USD with the live rate, then:
+//   final = wholesaleUsd × (1 + (profit% + tariff%)/100) + shippingCost
 function TaxSection({
-  wholesale,
+  wholesalePkr,
+  usdPerPkr,
   weight,
   defaults,
   profitPct, setProfitPct,
   tariffPct, setTariffPct,
   shippingCostOverride, setShippingCostOverride,
 }: {
-  wholesale: number;
+  wholesalePkr: number;
+  usdPerPkr: number;
   weight: number;
   defaults: TaxDefaults;
   profitPct: string; setProfitPct: (v: string) => void;
@@ -841,6 +849,9 @@ function TaxSection({
   const t = eff(tariffPct, defaults.tariffPct);
   const totalPct = p + t;
 
+  // The rep enters wholesale in PKR; everything below this is USD.
+  const wholesaleUsd = Math.round(wholesalePkr * usdPerPkr * 100) / 100;
+
   // Per-kg shipping: weight × (special bracket rate if matched, else general).
   const bracket = defaults.shippingBrackets.find(
     (b) => weight >= b.minKg && (b.maxKg == null || weight <= b.maxKg),
@@ -849,7 +860,7 @@ function TaxSection({
   const weightCost = Math.round(weight * rate * 100) / 100;
   const shippingCost = shippingCostOverride === "" ? weightCost : Number(shippingCostOverride) || 0;
 
-  const finalPrice = Math.round((wholesale * (1 + totalPct / 100) + shippingCost) * 100) / 100;
+  const finalPrice = Math.round((wholesaleUsd * (1 + totalPct / 100) + shippingCost) * 100) / 100;
 
   return (
     <section className="space-y-4">
@@ -857,6 +868,7 @@ function TaxSection({
       <p className="text-sm text-slate-500">
         Leave a field blank to use the global default (shown as the placeholder). Shipping is based
         on this product&apos;s weight ({weight} kg); set a custom cost to override the weight rate.
+        Prices are converted from PKR at the live rate (1 PKR = ${usdPerPkr.toFixed(5)}).
       </p>
       <div className="grid gap-4 sm:grid-cols-3">
         <Field label="Profit %">
@@ -867,7 +879,7 @@ function TaxSection({
           <Input type="number" min="0" step="0.01" value={tariffPct}
             onChange={(e) => setTariffPct(e.target.value)} placeholder={`Default ${defaults.tariffPct}%`} />
         </Field>
-        <Field label="Shipping cost (Rs)">
+        <Field label="Shipping cost (USD)">
           <Input type="number" min="0" step="0.01" value={shippingCostOverride}
             onChange={(e) => setShippingCostOverride(e.target.value)}
             placeholder={`Weight cost ${weightCost}`} />
@@ -875,12 +887,12 @@ function TaxSection({
       </div>
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-800 dark:bg-slate-900/60">
         <div className="flex items-center justify-between">
-          <span className="text-slate-500">Wholesale price</span>
-          <span className="font-medium">{formatCurrency(wholesale)}</span>
+          <span className="text-slate-500">Wholesale price ({formatPkr(wholesalePkr)})</span>
+          <span className="font-medium">{formatCurrency(wholesaleUsd)}</span>
         </div>
         <div className="mt-1 flex items-center justify-between">
           <span className="text-slate-500">Taxes ({p}% + {t}% = {totalPct}%)</span>
-          <span className="font-medium">+ {formatCurrency((wholesale * totalPct) / 100)}</span>
+          <span className="font-medium">+ {formatCurrency((wholesaleUsd * totalPct) / 100)}</span>
         </div>
         <div className="mt-1 flex items-center justify-between">
           <span className="text-slate-500">

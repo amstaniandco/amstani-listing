@@ -2,7 +2,7 @@
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency } from "@/lib/format";
+import { formatPkr } from "@/lib/format";
 import type { EditProduct } from "./product-form";
 
 interface ProductViewProps {
@@ -54,7 +54,7 @@ export function ProductView({ open, onOpenChange, product }: ProductViewProps) {
 
             {/* pricing */}
             <Section title="Pricing & Inventory">
-              <Row label="Wholesale Price" value={formatCurrency(product.price)} />
+              <Row label="Wholesale Price" value={formatPkr(product.price)} />
               <Row label="Stock status" value={product.stockStatus.replace("_", " ")} />
               <Row label="Total stock" value={String(product.totalStock)} />
             </Section>
@@ -85,7 +85,7 @@ export function ProductView({ open, onOpenChange, product }: ProductViewProps) {
                         <tr key={i} className="border-t border-slate-100">
                           <td className="py-1 pr-3">{v.size || "—"}</td><td className="py-1 pr-3">{v.color || "—"}</td>
                           <td className="py-1 pr-3">{v.stockQuantity}</td><td className="py-1 pr-3">{v.skuVariant}</td>
-                          <td className="py-1 pr-3">{v.priceOverride != null ? formatCurrency(v.priceOverride) : "Base"}</td>
+                          <td className="py-1 pr-3">{v.priceOverride != null ? formatPkr(v.priceOverride) : "Base"}</td>
                           {attrKeys.map((k) => (
                             <td key={k} className="py-1 pr-3">{v.attributes?.[k] || "—"}</td>
                           ))}

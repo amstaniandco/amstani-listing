@@ -5,6 +5,7 @@
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getUsdPerPkr, pkrToUsd } from "@/lib/data/currency";
 import {
   computeFinalPrice,
   getTaxSettings,
@@ -269,10 +270,15 @@ export async function listPendingProductsForAdmin(): Promise<AdminPendingProduct
 }
 
 // ---- ADMIN: approve / reject a product ----------------------------------
-// Approving applies the effective tax rates (per-product overrides, else the
-// global tax_settings) to the WHOLESALE base and overwrites product.price with
-// the final after-tax price. The wholesale base is preserved in wholesalePrice
-// so re-approval recomputes from the base instead of double-taxing.
+// Approving:
+//   1. Converts the rep-entered WHOLESALE base (PKR) to USD using the live rate.
+//   2. Applies the effective tax rates (per-product overrides, else the global
+//      tax_settings) plus shipping — all in USD — to get the final price.
+//   3. Stores BOTH the USD wholesale base (wholesalePrice) and the after-tax USD
+//      price (product.price), so the live store is fully USD.
+// The stored wholesalePrice entering this function is always PKR: a rep edit
+// resets it to the freshly-entered PKR amount and re-queues the product, and an
+// approved product leaves the queue, so we only ever convert a PKR base here.
 export async function approveProduct(productId: string, reviewerId: string): Promise<void> {
   const db = createAdminClient();
   const now = new Date().toISOString();
@@ -290,12 +296,19 @@ export async function approveProduct(productId: string, reviewerId: string): Pro
     ? p.shipping_info[0]?.weight ?? null
     : p.shipping_info?.weight ?? null;
 
-  // Base = stored wholesale if present, else the current price (first approval).
-  const wholesale = p.wholesalePrice ?? p.price;
-  const [global, brackets] = await Promise.all([getTaxSettings(), listShippingRates()]);
+  // Base (PKR) = stored wholesale if present, else the current price (first approval).
+  const wholesalePkr = p.wholesalePrice ?? p.price;
+  const [global, brackets, fx] = await Promise.all([
+    getTaxSettings(),
+    listShippingRates(),
+    getUsdPerPkr(),
+  ]);
+  // Convert the wholesale base to USD before any tax/shipping math (shipping
+  // rates are already in USD, so everything downstream is consistently USD).
+  const wholesaleUsd = pkrToUsd(wholesalePkr, fx.usdPerPkr);
   const rates = resolveRates(global, { profitPct: p.profitPct, tariffPct: p.tariffPct });
   const shippingCost = resolveShippingCost(weight, global.shippingPerKg, brackets, p.shippingCostOverride);
-  const finalPrice = computeFinalPrice(wholesale, rates, shippingCost);
+  const finalPrice = computeFinalPrice(wholesaleUsd, rates, shippingCost);
 
   const { error } = await db
     .from("product")
@@ -304,8 +317,8 @@ export async function approveProduct(productId: string, reviewerId: string): Pro
       rejectReason: null,
       reviewedBy: reviewerId,
       reviewedAt: now,
-      wholesalePrice: wholesale, // lock in the base
-      price: finalPrice, // live store shows the after-tax price
+      wholesalePrice: wholesaleUsd, // lock in the USD base
+      price: finalPrice, // live store shows the after-tax USD price
       updatedAt: now,
     } as never)
     .eq("id", productId);

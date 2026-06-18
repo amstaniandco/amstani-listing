@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { getShellUser } from "@/lib/auth/shell-user";
 import { listBrandReps } from "@/lib/data/admin-users";
+import { getUsdPerPkr } from "@/lib/data/currency";
 import { countBrands, countCategories, listCategories, listCategoryRequests } from "@/lib/data/categories";
 import {
   countAllProducts,
@@ -16,7 +17,7 @@ export default async function AdminDashboardPage() {
   if (!ctx) redirect("/login");
   if (ctx.session.role !== "ADMIN") redirect("/login");
 
-  const [reps, requests, products, pendingProducts, categories, taxRates, shippingBrackets, totalProducts, totalBrands, totalCategories] =
+  const [reps, requests, products, pendingProducts, categories, taxRates, shippingBrackets, totalProducts, totalBrands, totalCategories, fx] =
     await Promise.all([
       listBrandReps(),
       listCategoryRequests(),
@@ -28,6 +29,7 @@ export default async function AdminDashboardPage() {
       countAllProducts(),
       countBrands(),
       countCategories(),
+      getUsdPerPkr(),
     ]);
   const taxDefaults = {
     profitPct: taxRates.profitPct,
@@ -42,6 +44,7 @@ export default async function AdminDashboardPage() {
       counts={{ products: totalProducts, brands: totalBrands, categories: totalCategories }}
       categories={categories.map((c) => ({ id: c.id, name: c.name }))}
       taxDefaults={taxDefaults}
+      initialUsdPerPkr={fx.usdPerPkr}
       initialUsers={reps.map((r) => ({
         id: r.id,
         name: r.name,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -13,10 +13,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatCurrency, formatDate } from "@/lib/format";
+import { formatCurrency, formatDate, formatPkr } from "@/lib/format";
 import { ProductView } from "@/features/products/components/product-view";
 import { ProductForm, type CategoryOption, type EditProduct, type TaxDefaults } from "@/features/products/components/product-form";
 import type { ApprovalStatus } from "@/types/db";
@@ -91,6 +92,7 @@ export function AdminDashboardClient({
   counts,
   categories,
   taxDefaults,
+  initialUsdPerPkr,
   initialUsers,
   initialRequests,
   initialProducts,
@@ -100,6 +102,7 @@ export function AdminDashboardClient({
   counts: { products: number; brands: number; categories: number };
   categories: CategoryOption[];
   taxDefaults: TaxDefaults;
+  initialUsdPerPkr: number;
   initialUsers: UserItem[];
   initialRequests: RequestItem[];
   initialProducts: ProductItem[];
@@ -124,6 +127,42 @@ export function AdminDashboardClient({
   const [editId, setEditId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [formKey, setFormKey] = useState(0);
+  // Live PKR -> USD rate. Reps enter prices in PKR; the admin side shows USD.
+  // Seeded from the server, then refreshed periodically so previews track the
+  // live rate (the server applies the same live rate on approve).
+  const [usdPerPkr, setUsdPerPkr] = useState(initialUsdPerPkr);
+  // Brand filter for the Product Approvals tab ("all" => no filter).
+  const [pendingBrand, setPendingBrand] = useState("all");
+
+  // Refresh the FX rate every 10 minutes while the dashboard is open.
+  useEffect(() => {
+    let active = true;
+    async function refreshFx() {
+      const res = await fetch("/api/admin/fx").catch(() => null);
+      const data = await res?.json().catch(() => null);
+      if (active && data?.ok && typeof data.usdPerPkr === "number") {
+        setUsdPerPkr(data.usdPerPkr);
+      }
+    }
+    const id = setInterval(refreshFx, 10 * 60 * 1000);
+    return () => { active = false; clearInterval(id); };
+  }, []);
+
+  // Distinct brand names present in the pending queue, for the filter dropdown.
+  const pendingBrands = useMemo(
+    () =>
+      [...new Set(pendingProducts.map((p) => p.brandName).filter((b): b is string => Boolean(b)))].sort(
+        (a, b) => a.localeCompare(b),
+      ),
+    [pendingProducts],
+  );
+  const filteredPending = useMemo(
+    () =>
+      pendingBrand === "all"
+        ? pendingProducts
+        : pendingProducts.filter((p) => p.brandName === pendingBrand),
+    [pendingProducts, pendingBrand],
+  );
 
   async function refreshPending() {
     const res = await fetch("/api/admin/products/pending");
@@ -239,11 +278,18 @@ export function AdminDashboardClient({
     router.refresh();
   }
 
-  // Final (after-tax) price the admin will lock in on approve. Uses the product's
-  // overrides where set, else the global rates / weight-bracket lookup —
-  // mirrors the server math in tax.ts / approveProduct.
+  // The rep's wholesale base is in PKR; convert to USD with the live rate.
+  function wholesaleUsdOf(p: PendingProductItem): number {
+    const basePkr = p.wholesalePrice ?? p.price;
+    return Math.round(basePkr * usdPerPkr * 100) / 100;
+  }
+
+  // Final (after-tax) USD price the admin will lock in on approve. Converts the
+  // PKR base to USD first, then applies the product's overrides where set, else
+  // the global rates / weight-bracket lookup — mirrors the server math in
+  // tax.ts / approveProduct (which uses the same live rate).
   function finalPriceOf(p: PendingProductItem): number {
-    const base = p.wholesalePrice ?? p.price;
+    const base = wholesaleUsdOf(p);
     const profit = p.profitPct ?? taxDefaults.profitPct;
     const tariff = p.tariffPct ?? taxDefaults.tariffPct;
     const total = profit + tariff;
@@ -389,25 +435,53 @@ export function AdminDashboardClient({
                 {pendingProducts.length === 0 ? (
                   <EmptyState title="No products awaiting approval" description="New product submissions show up here for review." />
                 ) : (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 p-4 dark:border-slate-800">
+                      <span className="text-sm text-slate-500">
+                        {filteredPending.length} {filteredPending.length === 1 ? "product" : "products"}
+                        {pendingBrand !== "all" ? ` · ${pendingBrand}` : ""}
+                        <span className="ml-2 text-xs text-slate-400">live rate: 1 PKR = ${usdPerPkr.toFixed(5)}</span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="pending-brand-filter" className="text-sm text-slate-500">Brand</Label>
+                        <Select value={pendingBrand} onValueChange={setPendingBrand}>
+                          <SelectTrigger id="pending-brand-filter" className="w-56">
+                            <SelectValue placeholder="All brands" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All brands</SelectItem>
+                            {pendingBrands.map((b) => (
+                              <SelectItem key={b} value={b}>{b}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    {filteredPending.length === 0 ? (
+                      <EmptyState title="No products for this brand" description="No pending submissions match the selected brand." />
+                    ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Product</TableHead>
                         <TableHead>Brand</TableHead>
                         <TableHead>SKU</TableHead>
-                        <TableHead>Wholesale</TableHead>
+                        <TableHead>Wholesale (USD)</TableHead>
                         <TableHead>Final (after tax)</TableHead>
                         <TableHead>Submitted</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {pendingProducts.map((p) => (
+                      {filteredPending.map((p) => (
                         <TableRow key={p.id}>
                           <TableCell className="font-medium">{p.name}</TableCell>
                           <TableCell>{p.brandName ?? "—"}</TableCell>
                           <TableCell>{p.sku}</TableCell>
-                          <TableCell>{formatCurrency(p.wholesalePrice ?? p.price)}</TableCell>
+                          <TableCell>
+                            {formatCurrency(wholesaleUsdOf(p))}
+                            <span className="block text-xs text-slate-400">{formatPkr(p.wholesalePrice ?? p.price)}</span>
+                          </TableCell>
                           <TableCell className="font-semibold">{formatCurrency(finalPriceOf(p))}</TableCell>
                           <TableCell>{p.submittedAt ? formatDate(p.submittedAt) : "—"}</TableCell>
                           <TableCell>
@@ -458,6 +532,8 @@ export function AdminDashboardClient({
                       ))}
                     </TableBody>
                   </Table>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>
@@ -520,6 +596,7 @@ export function AdminDashboardClient({
         product={editing}
         adminEndpoint={editId ? `/api/admin/products/${editId}` : undefined}
         taxDefaults={taxDefaults}
+        usdPerPkr={usdPerPkr}
         onSaved={refreshPending}
       />
 
@@ -530,7 +607,7 @@ export function AdminDashboardClient({
         title="Approve and list this product?"
         description={
           approveItem
-            ? `Wholesale ${formatCurrency(approveItem.wholesalePrice ?? approveItem.price)} + taxes → final price ${formatCurrency(finalPriceOf(approveItem))}. This after-tax price will be set on the product and it goes live.`
+            ? `Wholesale ${formatPkr(approveItem.wholesalePrice ?? approveItem.price)} → ${formatCurrency(wholesaleUsdOf(approveItem))} (live rate) + taxes → final price ${formatCurrency(finalPriceOf(approveItem))}. This after-tax USD price will be set on the product and it goes live.`
             : ""
         }
         confirmLabel="Approve at this price"

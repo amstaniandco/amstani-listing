@@ -65,3 +65,18 @@ export async function setUserStatus(userId: string, action: StatusAction): Promi
   if (error) throw new Error(error.message);
   return data as unknown as UserRow;
 }
+
+// Permanently delete a brand rep account. Scoped to BRAND_REP so the admin can
+// never delete an admin or a customer through this path.
+export async function deleteBrandRep(userId: string): Promise<void> {
+  const db = createAdminClient();
+  const { data, error } = await db
+    .from("users")
+    .delete()
+    .eq("id", userId)
+    .eq("role", "BRAND_REP")
+    .select("id")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("Brand rep not found.");
+}

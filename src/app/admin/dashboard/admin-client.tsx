@@ -113,6 +113,7 @@ export function AdminDashboardClient({
   const [viewing, setViewing] = useState<PendingProductItem | null>(null);
   const [viewOpen, setViewOpen] = useState(false);
   const [rejectId, setRejectId] = useState<string | null>(null);
+  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
   const [approveItem, setApproveItem] = useState<PendingProductItem | null>(null);
   // "Request changes" dialog: which product, and the note the admin writes.
   const [changesId, setChangesId] = useState<string | null>(null);
@@ -193,6 +194,18 @@ export function AdminDashboardClient({
     }
     setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, status: data.status } : u)));
     toast.success("Updated.");
+    router.refresh();
+  }
+
+  async function deleteUser(id: string) {
+    const res = await fetch(`/api/admin/users/${id}/status`, { method: "DELETE" });
+    const data = await res.json();
+    if (!data.ok) {
+      toast.error(data.message ?? "Delete failed.");
+      return;
+    }
+    setUsers((prev) => prev.filter((u) => u.id !== id));
+    toast.success("Brand rep deleted.");
     router.refresh();
   }
 
@@ -301,7 +314,7 @@ export function AdminDashboardClient({
                           <TableCell>{u.brandName ?? "—"}</TableCell>
                           <TableCell><Badge variant={userStatusVariant[u.status]}>{u.status}</Badge></TableCell>
                           <TableCell>
-                            <div className="flex justify-end gap-2">
+                            <div className="flex flex-wrap justify-end gap-2">
                               {u.status === "PENDING" && (
                                 <>
                                   <Button size="sm" onClick={() => userAction(u.id, "approve")}>Approve</Button>
@@ -314,6 +327,7 @@ export function AdminDashboardClient({
                               {u.status === "BLOCKED" && (
                                 <Button size="sm" variant="outline" onClick={() => userAction(u.id, "reactivate")}>Reactivate</Button>
                               )}
+                              <Button size="sm" variant="outline" className="text-rose-600" onClick={() => setDeleteUserId(u.id)}>Delete</Button>
                             </div>
                           </TableCell>
                         </TableRow>
@@ -523,6 +537,20 @@ export function AdminDashboardClient({
         onConfirm={() => {
           if (approveItem) reviewProduct(approveItem.id, "approve");
           setApproveItem(null);
+        }}
+      />
+
+      {/* Delete brand rep confirmation — permanent. */}
+      <ConfirmDialog
+        open={Boolean(deleteUserId)}
+        onOpenChange={(open) => !open && setDeleteUserId(null)}
+        title="Delete this brand rep?"
+        description="This permanently removes the account. They will lose portal access immediately. This can't be undone."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => {
+          if (deleteUserId) deleteUser(deleteUserId);
+          setDeleteUserId(null);
         }}
       />
 

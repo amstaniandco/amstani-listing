@@ -43,7 +43,7 @@ const updateSchema = z.object({
   seoDescription: z.string().nullable().optional(),
   images: z.array(z.string()).min(1),
   variants: z.array(variantSchema).min(1),
-  sizeCharts: z.array(sizeChartSchema).min(1),
+  sizeCharts: z.array(sizeChartSchema), // optional — may be empty
   shipping: z.object({
     weight: z.coerce.number().min(0).nullable().optional(),
     dimensionL: z.coerce.number().min(0).nullable().optional(),

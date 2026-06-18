@@ -355,7 +355,7 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
       if (!v.skuVariant.trim()) return "Each variant needs a Variant SKU.";
       if (v.sizeType !== "none" && !v.size.trim()) return "Enter a size, or set Size Type to “No Size”.";
     }
-    if (!sizeChart.length) return "Add at least one size chart row.";
+    // Size chart is optional — a product can be saved without any size rows.
     if (!weight || Number(weight) < 0) return "Weight is required.";
     // Dimensions are optional — a product can be saved without L × W × H.
     if (!seoTitle.trim()) return "SEO title is required.";
@@ -630,7 +630,9 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
           {/* SIZE CHART */}
           <section className="space-y-4">
             <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="text-lg font-semibold">Size Chart</h3>
+              <h3 className="text-lg font-semibold">
+                Size Chart <span className="text-sm font-normal text-slate-400">— optional</span>
+              </h3>
               <div className="flex gap-2">
                 <Button type="button" size="sm" variant="outline" onClick={() => setShowVariables((s) => !s)}>
                   {showVariables ? "Hide Variables" : "Manage Variables"}

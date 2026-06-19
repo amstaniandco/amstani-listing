@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Lock, Percent, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,27 +20,10 @@ const navItems: NavItem[] = [
 ];
 
 // Soft PIN gate for this page. NOTE: client-side only — it hides the UI from
-// casual access; the data is still admin-auth-protected server-side. Unlock
-// persists for the browser-tab session.
+// casual access; the data is still admin-auth-protected server-side. The unlock
+// state lives in component memory only, so the page RE-LOCKS on every visit:
+// navigating away and back remounts this component and resets `unlocked` to false.
 const PAGE_PIN = "9644";
-const UNLOCK_KEY = "amstani_taxes_unlocked";
-
-// Tiny external store over sessionStorage so the unlock flag reads cleanly with
-// useSyncExternalStore (server snapshot = locked; no hydration mismatch).
-const unlockStore = {
-  listeners: new Set<() => void>(),
-  subscribe(cb: () => void) {
-    unlockStore.listeners.add(cb);
-    return () => unlockStore.listeners.delete(cb);
-  },
-  isUnlocked() {
-    return typeof window !== "undefined" && sessionStorage.getItem(UNLOCK_KEY) === "1";
-  },
-  unlock() {
-    sessionStorage.setItem(UNLOCK_KEY, "1");
-    unlockStore.listeners.forEach((cb) => cb());
-  },
-};
 
 interface TaxSettings {
   profitPct: number;
@@ -72,18 +55,14 @@ export function TaxSettingsClient({
 }) {
   const router = useRouter();
 
-  // PIN gate. Server snapshot is always locked (false) so SSR and the first
-  // client render match; the real per-tab unlock state is read on the client.
-  const unlocked = useSyncExternalStore(
-    unlockStore.subscribe,
-    unlockStore.isUnlocked,
-    () => false,
-  );
+  // PIN gate. In-memory only — starts locked on every mount, so leaving and
+  // returning to the page always requires the PIN again.
+  const [unlocked, setUnlocked] = useState(false);
   const [pin, setPin] = useState("");
 
   function submitPin() {
     if (pin === PAGE_PIN) {
-      unlockStore.unlock();
+      setUnlocked(true);
       setPin("");
     } else {
       toast.error("Incorrect PIN.");

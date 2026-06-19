@@ -168,7 +168,9 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
   const [stockStatus, setStockStatus] = useState<"IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK">(product?.stockStatus ?? "IN_STOCK");
   const [totalStock, setTotalStock] = useState(product ? String(product.totalStock) : "");
   const isFeatured = product?.isFeatured ?? false;
-  const [isPublished, setIsPublished] = useState(product?.isPublished ?? true);
+  // Brand reps can't set visibility — new rep products stay unpublished until the
+  // admin approves them. Admins keep the published-by-default behaviour.
+  const [isPublished, setIsPublished] = useState(product?.isPublished ?? isAdmin);
   // Variants
   const [variants, setVariants] = useState<VariantRow[]>(
     product?.variants.length
@@ -508,15 +510,19 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
               <Field label="Total Stock" required>
                 <Input type="number" min="0" value={totalStock} onChange={(e) => setTotalStock(e.target.value)} placeholder="0" />
               </Field>
-              <Field label="Visibility">
-                <Select value={isPublished ? "published" : "draft"} onValueChange={(v) => setIsPublished(v === "published")}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="published">Published</SelectItem>
-                    <SelectItem value="draft">Draft</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
+              {/* Visibility is admin-only. Brand-rep products stay unpublished until
+                  the admin approves them (see approval flow). */}
+              {isAdmin && (
+                <Field label="Visibility">
+                  <Select value={isPublished ? "published" : "draft"} onValueChange={(v) => setIsPublished(v === "published")}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="published">Published</SelectItem>
+                      <SelectItem value="draft">Draft</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              )}
             </div>
           </section>
 

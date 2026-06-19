@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { getShellUser } from "@/lib/auth/shell-user";
 import { listProductsForBrand } from "@/lib/data/products";
-import { formatCurrency, formatDate } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 
 const navItems: NavItem[] = [
   { label: "Dashboard", href: "/brand/dashboard", icon: "dashboard" },
@@ -58,8 +58,7 @@ export default async function BrandDashboardPage() {
                     <Badge variant={p.isPublished ? "success" : "secondary"}>{p.isPublished ? "Published" : "Draft"}</Badge>
                   </div>
                   <Separator className="my-3" />
-                  <div className="flex items-center justify-between text-sm text-slate-500 dark:text-slate-400">
-                    <span>{formatCurrency(p.price)}</span>
+                  <div className="flex items-center justify-end text-sm text-slate-500 dark:text-slate-400">
                     <span>{formatDate(p.createdAt)}</span>
                   </div>
                 </div>

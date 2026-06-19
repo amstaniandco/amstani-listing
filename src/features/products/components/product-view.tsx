@@ -9,9 +9,12 @@ interface ProductViewProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   product: (EditProduct & { brandName?: string | null; categoryNames?: string[] }) | null;
+  // Wholesale price is admin-only context (used during pre-approval review).
+  // Hidden from the brand rep's own product view by default.
+  showWholesalePrice?: boolean;
 }
 
-export function ProductView({ open, onOpenChange, product }: ProductViewProps) {
+export function ProductView({ open, onOpenChange, product, showWholesalePrice = false }: ProductViewProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[95vh] w-full max-w-3xl overflow-y-auto">
@@ -54,7 +57,7 @@ export function ProductView({ open, onOpenChange, product }: ProductViewProps) {
 
             {/* pricing */}
             <Section title="Pricing & Inventory">
-              <Row label="Wholesale Price" value={formatPkr(product.price)} />
+              {showWholesalePrice && <Row label="Wholesale Price" value={formatPkr(product.price)} />}
               <Row label="Stock status" value={product.stockStatus.replace("_", " ")} />
               <Row label="Total stock" value={String(product.totalStock)} />
             </Section>

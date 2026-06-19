@@ -583,8 +583,8 @@ export function AdminDashboardClient({
         </Tabs>
       </div>
 
-      {/* Full pre-approval product review (read-only). */}
-      <ProductView open={viewOpen} onOpenChange={setViewOpen} product={viewing} />
+      {/* Full pre-approval product review (read-only). Admin sees wholesale price. */}
+      <ProductView open={viewOpen} onOpenChange={setViewOpen} product={viewing} showWholesalePrice />
 
       {/* Admin product editor — edits any field (incl. price) before approval. */}
       <ProductForm

@@ -167,7 +167,7 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
   );
   const [stockStatus, setStockStatus] = useState<"IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK">(product?.stockStatus ?? "IN_STOCK");
   const [totalStock, setTotalStock] = useState(product ? String(product.totalStock) : "");
-  const [isFeatured, setIsFeatured] = useState(product?.isFeatured ?? false);
+  const isFeatured = product?.isFeatured ?? false;
   const [isPublished, setIsPublished] = useState(product?.isPublished ?? true);
   // Variants
   const [variants, setVariants] = useState<VariantRow[]>(
@@ -518,9 +518,6 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
                 </Select>
               </Field>
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox checked={isFeatured} onCheckedChange={(c) => setIsFeatured(Boolean(c))} /> Featured product
-            </label>
           </section>
 
           {/* SHIPPING & TAXES (admin only) */}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Lock, Plus, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
@@ -15,27 +15,10 @@ import { formatCurrency, formatPkr } from "@/lib/format";
 
 // Soft PIN gate for the admin Shipping & Taxes section of this form. Client-side
 // only — it hides the pricing/override UI from casual access; the data is still
-// admin-auth-protected server-side. Unlock persists for the browser-tab session
-// (separate key from the Shipping & Taxes page so each is gated independently).
+// admin-auth-protected server-side. The unlock state lives in component memory
+// only, so the section RE-LOCKS every time the form is (re)opened: closing and
+// reopening the product remounts TaxSection and resets `unlocked` to false.
 const TAX_SECTION_PIN = "9644";
-const TAX_SECTION_UNLOCK_KEY = "amstani_product_taxes_unlocked";
-
-// Tiny external store over sessionStorage so the unlock flag reads cleanly with
-// useSyncExternalStore (server snapshot = locked; no hydration mismatch).
-const taxUnlockStore = {
-  listeners: new Set<() => void>(),
-  subscribe(cb: () => void) {
-    taxUnlockStore.listeners.add(cb);
-    return () => taxUnlockStore.listeners.delete(cb);
-  },
-  isUnlocked() {
-    return typeof window !== "undefined" && sessionStorage.getItem(TAX_SECTION_UNLOCK_KEY) === "1";
-  },
-  unlock() {
-    sessionStorage.setItem(TAX_SECTION_UNLOCK_KEY, "1");
-    taxUnlockStore.listeners.forEach((cb) => cb());
-  },
-};
 
 export interface CategoryOption {
   id: string;
@@ -108,6 +91,8 @@ export interface EditProduct {
   shipmentPct?: number | null; // legacy, unused
   shippingCostOverride?: number | null;
   wholesalePrice?: number | null;
+  // The rep's original PKR price, preserved across admin approval.
+  vendorPricePkr?: number | null;
 }
 
 // Special per-kg bracket: weight in [minKg, maxKg] charged at ratePerKg $/kg.
@@ -155,9 +140,19 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
   const [fullDescription, setFullDescription] = useState(product?.fullDescription ?? "");
   // Pricing & inventory — reps set the wholesale price (editable on edit too).
   // Compare-at and cost price are not collected from brand reps.
-  // In admin mode `price` is treated as the WHOLESALE (pre-tax) base.
+  // Vendor view: show the rep's ORIGINAL PKR price (vendorPricePkr), which admin
+  // approval never overwrites — so the rep always sees what they entered, not the
+  // USD numbers approval wrote into wholesalePrice/price. Legacy rows without
+  // vendorPricePkr fall back to wholesalePrice.
+  // In admin mode `price` is treated as the WHOLESALE (pre-tax) USD base.
   const [price, setPrice] = useState(
-    product ? String(product.wholesalePrice ?? product.price) : "",
+    product
+      ? isAdmin
+        ? String(product.wholesalePrice ?? product.price)
+        : // Vendor PKR is whole rupees — drop any decimal (e.g. reconstructed
+          // 277.78 -> 278) so the field never shows point values.
+          String(Math.round(product.vendorPricePkr ?? product.wholesalePrice ?? product.price))
+      : "",
   );
   // Per-product overrides (admin). "" => use the global default / weight lookup.
   const [profitPct, setProfitPct] = useState(product?.profitPct != null ? String(product.profitPct) : "");
@@ -489,10 +484,11 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
             <h3 className={sectionTitle}>Pricing &amp; Inventory</h3>
             <div className="grid gap-4 sm:grid-cols-3">
               <Field label="Wholesale Price (Rs)" required>
+                {/* Vendors enter whole rupees (no decimals); admin's USD base keeps cents. */}
                 <Input
-                  type="number" min="0" step="0.01" value={price}
+                  type="number" min="0" step={isAdmin ? "0.01" : "1"} value={price}
                   onChange={(e) => setPrice(e.target.value)}
-                  placeholder="0.00"
+                  placeholder={isAdmin ? "0.00" : "0"}
                 />
               </Field>
             </div>
@@ -796,18 +792,14 @@ function TaxSection({
   tariffPct: string; setTariffPct: (v: string) => void;
   shippingCostOverride: string; setShippingCostOverride: (v: string) => void;
 }) {
-  // PIN gate. Server snapshot is always locked (false) so SSR and the first
-  // client render match; the real per-tab unlock state is read on the client.
-  const unlocked = useSyncExternalStore(
-    taxUnlockStore.subscribe,
-    taxUnlockStore.isUnlocked,
-    () => false,
-  );
+  // PIN gate. In-memory only — starts locked on every mount, so reopening the
+  // form (or switching products) always requires the PIN again.
+  const [unlocked, setUnlocked] = useState(false);
   const [pin, setPin] = useState("");
 
   function submitPin() {
     if (pin === TAX_SECTION_PIN) {
-      taxUnlockStore.unlock();
+      setUnlocked(true);
       setPin("");
     } else {
       toast.error("Incorrect PIN.");

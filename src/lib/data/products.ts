@@ -454,6 +454,9 @@ export interface FullProductDetail {
   shipmentPct: number | null; // legacy
   shippingCostOverride: number | null; // null => weight-bracket lookup
   wholesalePrice: number | null;
+  // The rep's original PKR price, untouched by admin approval. Null for legacy
+  // rows that predate this column (callers fall back to wholesalePrice).
+  vendorPricePkr: number | null;
 }
 
 export async function getFullProductForBrand(
@@ -535,6 +538,7 @@ function mapFullDetail<T extends object = object>(
     shipmentPct: p.shipmentPct ?? null,
     shippingCostOverride: p.shippingCostOverride ?? null,
     wholesalePrice: p.wholesalePrice ?? null,
+    vendorPricePkr: p.vendorPricePkr ?? null,
     ...(extra ?? ({} as T)),
   };
 }
@@ -570,6 +574,8 @@ export async function updateFullProductForBrand(
       fullDescription: input.fullDescription,
       price: input.price,
       wholesalePrice: input.price,
+      // Keep the preserved vendor PKR in sync with the rep's latest input.
+      vendorPricePkr: input.price,
       stockStatus: input.stockStatus,
       totalStock: input.totalStock,
       isFeatured: input.isFeatured,
@@ -730,6 +736,9 @@ export async function createFullProductForBrand(
     fullDescription: input.fullDescription,
     price: input.price,
     wholesalePrice: input.price,
+    // The rep's original PKR price — preserved as-is so admin approval (which
+    // converts wholesalePrice/price to USD) never hides what the vendor entered.
+    vendorPricePkr: input.price,
     compareAtPrice: input.compareAtPrice ?? null,
     costPrice: input.costPrice ?? null,
     stockStatus: input.stockStatus,

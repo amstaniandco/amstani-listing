@@ -64,6 +64,20 @@ function inferSizeType(size: string, isCustomSize?: boolean): SizeType {
   return PRESET_SET.has(size) ? "preset" : "custom";
 }
 
+// Stock status is derived automatically from the total stock, not chosen by hand:
+//   0 => Out of stock, 1–10 => Low stock, 11+ => In stock.
+type StockStatus = "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK";
+function deriveStockStatus(total: number): StockStatus {
+  if (!(total > 0)) return "OUT_OF_STOCK"; // 0, blank, or NaN
+  if (total <= 10) return "LOW_STOCK";
+  return "IN_STOCK";
+}
+const STOCK_STATUS_LABEL: Record<StockStatus, string> = {
+  IN_STOCK: "In stock",
+  LOW_STOCK: "Low stock",
+  OUT_OF_STOCK: "Out of stock",
+};
+
 // Normalise a size/color value into an uppercase SKU-safe token:
 //   "Large 35cm" -> "LARGE-35CM", "red" -> "RED".
 function skuToken(value: string): string {
@@ -185,8 +199,9 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
   const [shippingCostOverride, setShippingCostOverride] = useState(
     product?.shippingCostOverride != null ? String(product.shippingCostOverride) : "",
   );
-  const [stockStatus, setStockStatus] = useState<"IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK">(product?.stockStatus ?? "IN_STOCK");
   const [totalStock, setTotalStock] = useState(product ? String(product.totalStock) : "");
+  // Stock status is auto-derived from the total stock (no manual control).
+  const stockStatus = deriveStockStatus(Number(totalStock));
   const isFeatured = product?.isFeatured ?? false;
   // Brand reps can't set visibility — new rep products stay unpublished until the
   // admin approves them. Admins keep the published-by-default behaviour.
@@ -552,14 +567,10 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
               </Field>
             </div>
             <div className="grid gap-4 sm:grid-cols-3">
-              <Field label="Stock Status" required>
-                <Select value={stockStatus} onValueChange={(v) => setStockStatus(v as typeof stockStatus)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="IN_STOCK">In stock</SelectItem>
-                    <SelectItem value="OUT_OF_STOCK">Out of stock</SelectItem>
-                  </SelectContent>
-                </Select>
+              <Field label="Stock Status">
+                {/* Auto-derived from Total Stock: 0 = Out of stock, 1–10 = Low stock, 11+ = In stock. */}
+                <Input value={STOCK_STATUS_LABEL[stockStatus]} readOnly tabIndex={-1} className="cursor-default bg-slate-50 dark:bg-slate-900/40" />
+                <p className="mt-1 text-xs text-slate-400">Set automatically from the total stock.</p>
               </Field>
               <Field label="Total Stock" required>
                 <Input type="number" min="0" value={totalStock} onChange={(e) => setTotalStock(e.target.value)} placeholder="0" />

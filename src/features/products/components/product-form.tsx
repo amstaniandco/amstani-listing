@@ -42,6 +42,11 @@ interface VariantRow {
   skuVariant: string;
   priceOverride: string; // "" => use the product's base price
   attributes: Record<string, string>;
+  // false => the SKU is auto-derived from the product SKU + size/color and kept
+  // in sync as those change. Flips to true the moment a user types in the SKU
+  // field (or for variants loaded from an existing product), so we never clobber
+  // a manually-entered SKU.
+  skuTouched: boolean;
 }
 interface SizeChartRow {
   size: string;
@@ -57,6 +62,26 @@ function inferSizeType(size: string, isCustomSize?: boolean): SizeType {
   if (!size) return "none";
   if (isCustomSize) return "custom";
   return PRESET_SET.has(size) ? "preset" : "custom";
+}
+
+// Normalise a size/color value into an uppercase SKU-safe token:
+//   "Large 35cm" -> "LARGE-35CM", "red" -> "RED".
+function skuToken(value: string): string {
+  return value.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+// Auto-derive a variant SKU from the product SKU plus the variant's distinguishing
+// attribute: size for sized variants, color for color-only variants (both when set).
+// Falls back to a 1-based index so color-only rows without a color still get a
+// unique, non-empty SKU. Returns "" until the product SKU is entered.
+function deriveVariantSku(productSku: string, v: Pick<VariantRow, "sizeType" | "size" | "color">, index: number): string {
+  const base = skuToken(productSku);
+  if (!base) return "";
+  const parts: string[] = [];
+  if (v.sizeType !== "none" && v.size.trim()) parts.push(skuToken(v.size));
+  if (v.color.trim()) parts.push(skuToken(v.color));
+  if (parts.length === 0) parts.push(String(index + 1));
+  return [base, ...parts].join("-");
 }
 
 export interface EditProduct {
@@ -174,8 +199,10 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
           size: v.size, color: v.color, stockQuantity: String(v.stockQuantity), skuVariant: v.skuVariant,
           priceOverride: v.priceOverride != null ? String(v.priceOverride) : "",
           attributes: { ...(v.attributes ?? {}) },
+          // Saved variants already have a SKU — keep it, don't auto-overwrite.
+          skuTouched: true,
         }))
-      : [{ sizeType: "none" as SizeType, size: "", color: "", stockQuantity: "0", skuVariant: "", priceOverride: "", attributes: {} }],
+      : [{ sizeType: "none" as SizeType, size: "", color: "", stockQuantity: "0", skuVariant: "", priceOverride: "", attributes: {}, skuTouched: false }],
   );
   // Extra per-variant attribute columns (beyond size/color/stock/SKU), e.g. for
   // shoes: width, material. Managed like the size-chart variables. Seeded from
@@ -255,21 +282,48 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
   }
 
   // ---- variants
+  // Re-derive the auto SKU for every row that the user hasn't manually edited.
+  // Run after any change to the product SKU or a variant's size/color/size-type.
+  function withAutoSkus(rows: VariantRow[]): VariantRow[] {
+    return rows.map((row, idx) =>
+      row.skuTouched ? row : { ...row, skuVariant: deriveVariantSku(sku, row, idx) },
+    );
+  }
+  // Changing the product SKU re-derives every auto variant SKU against the new
+  // value (using nextSku directly to avoid the stale `sku` closure).
+  function onProductSkuChange(nextSku: string) {
+    setSku(nextSku);
+    setVariants((rows) =>
+      rows.map((row, idx) =>
+        row.skuTouched ? row : { ...row, skuVariant: deriveVariantSku(nextSku, row, idx) },
+      ),
+    );
+  }
   function addVariant() {
-    setVariants((v) => [...v, { sizeType: "none", size: "", color: "", stockQuantity: "0", skuVariant: "", priceOverride: "", attributes: {} }]);
+    setVariants((v) => withAutoSkus([
+      ...v,
+      { sizeType: "none", size: "", color: "", stockQuantity: "0", skuVariant: "", priceOverride: "", attributes: {}, skuTouched: false },
+    ]));
   }
   function updateVariant(i: number, patch: Partial<VariantRow>) {
-    setVariants((v) => v.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+    setVariants((v) => withAutoSkus(v.map((row, idx) => (idx === i ? { ...row, ...patch } : row))));
   }
   // Switching size type clears the size value (preset uses the list, custom is
   // free text, none has no size). Default a preset to "M" so the select isn't empty.
   function updateVariantSizeType(i: number, sizeType: SizeType) {
-    setVariants((v) => v.map((row, idx) =>
+    setVariants((v) => withAutoSkus(v.map((row, idx) =>
       idx === i ? { ...row, sizeType, size: sizeType === "preset" ? "M" : "" } : row,
-    ));
+    )));
+  }
+  // User typed in a variant SKU field: store it verbatim and stop auto-deriving.
+  // Clearing the field re-enables auto-derivation.
+  function editVariantSku(i: number, value: string) {
+    setVariants((v) => withAutoSkus(v.map((row, idx) =>
+      idx === i ? { ...row, skuVariant: value, skuTouched: value.trim() !== "" } : row,
+    )));
   }
   function removeVariant(i: number) {
-    setVariants((v) => v.filter((_, idx) => idx !== i));
+    setVariants((v) => withAutoSkus(v.filter((_, idx) => idx !== i)));
   }
   function updateVariantAttr(i: number, varName: string, value: string) {
     setVariants((v) => v.map((row, idx) =>
@@ -352,9 +406,13 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
     if (totalStock === "" || Number(totalStock) < 0) return "Total stock is required.";
     if (!images.length) return "Upload at least one image.";
     if (!variants.length) return "Add at least one variant.";
+    const seenSkus = new Set<string>();
     for (const v of variants) {
       if (!v.skuVariant.trim()) return "Each variant needs a Variant SKU.";
       if (v.sizeType !== "none" && !v.size.trim()) return "Enter a size, or set Size Type to “No Size”.";
+      const key = v.skuVariant.trim().toUpperCase();
+      if (seenSkus.has(key)) return `Duplicate variant SKU "${v.skuVariant.trim()}" — give these variants different sizes/colors.`;
+      seenSkus.add(key);
     }
     // Size chart is optional — a product can be saved without any size rows.
     if (!weight || Number(weight) < 0) return "Weight is required.";
@@ -454,7 +512,7 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
                 <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g., Premium Cotton T-Shirt" />
               </Field>
               <Field label="SKU" required>
-                <Input value={sku} onChange={(e) => setSku(e.target.value)} placeholder="e.g., TSH-001" />
+                <Input value={sku} onChange={(e) => onProductSkuChange(e.target.value)} placeholder="e.g., TSH-001" />
               </Field>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -599,7 +657,16 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
                     </Field>
                     <Field label="Color (optional)"><Input value={v.color} onChange={(e) => updateVariant(i, { color: e.target.value })} placeholder="Red" /></Field>
                     <Field label="Stock"><Input type="number" min="0" value={v.stockQuantity} onChange={(e) => updateVariant(i, { stockQuantity: e.target.value })} placeholder="0" /></Field>
-                    <Field label="Variant SKU" required><Input value={v.skuVariant} onChange={(e) => updateVariant(i, { skuVariant: e.target.value })} placeholder="SKU" /></Field>
+                    <Field label="Variant SKU" required>
+                      <Input
+                        value={v.skuVariant}
+                        onChange={(e) => editVariantSku(i, e.target.value)}
+                        placeholder={sku ? deriveVariantSku(sku, v, i) || "Auto" : "Enter product SKU first"}
+                      />
+                      <p className="mt-1 text-xs text-slate-400">
+                        {v.skuTouched ? "Custom — clear to auto-generate." : "Auto-generated from the product SKU."}
+                      </p>
+                    </Field>
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

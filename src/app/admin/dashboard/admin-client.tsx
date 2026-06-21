@@ -313,10 +313,11 @@ export function AdminDashboardClient({
       user={shell}
     >
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
           <StatCard label="Pending Reps" value={String(pendingUsers)} />
           <StatCard label="Pending Categories" value={String(pendingReqs)} />
           <StatCard label="Pending Products" value={String(pendingProducts.length)} />
+          <StatCard label="Total Users" value={users.length.toLocaleString()} />
           <StatCard label="Total Products" value={counts.products.toLocaleString()} />
           <StatCard label="Total Brands" value={counts.brands.toLocaleString()} />
           <StatCard label="Total Categories" value={counts.categories.toLocaleString()} />

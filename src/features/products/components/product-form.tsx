@@ -732,13 +732,16 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Weight (kg)" required><Input type="number" min="0" step="0.01" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="0.5" /></Field>
             </div>
-            <Field label="Dimensions (L × W × H in cm) — optional">
-              <div className="grid grid-cols-3 gap-2">
-                <Input type="number" min="0" value={dimL} onChange={(e) => setDimL(e.target.value)} placeholder="Length" />
-                <Input type="number" min="0" value={dimW} onChange={(e) => setDimW(e.target.value)} placeholder="Width" />
-                <Input type="number" min="0" value={dimH} onChange={(e) => setDimH(e.target.value)} placeholder="Height" />
-              </div>
-            </Field>
+            {/* Dimensions are admin-only — brand reps just provide the weight. */}
+            {isAdmin && (
+              <Field label="Dimensions (L × W × H in cm) — optional">
+                <div className="grid grid-cols-3 gap-2">
+                  <Input type="number" min="0" value={dimL} onChange={(e) => setDimL(e.target.value)} placeholder="Length" />
+                  <Input type="number" min="0" value={dimW} onChange={(e) => setDimW(e.target.value)} placeholder="Width" />
+                  <Input type="number" min="0" value={dimH} onChange={(e) => setDimH(e.target.value)} placeholder="Height" />
+                </div>
+              </Field>
+            )}
           </section>
 
           {/* SEO */}

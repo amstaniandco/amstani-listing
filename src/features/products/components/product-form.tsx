@@ -498,7 +498,6 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="IN_STOCK">In stock</SelectItem>
-                    <SelectItem value="LOW_STOCK">Low stock</SelectItem>
                     <SelectItem value="OUT_OF_STOCK">Out of stock</SelectItem>
                   </SelectContent>
                 </Select>

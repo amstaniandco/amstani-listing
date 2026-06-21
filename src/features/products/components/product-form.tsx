@@ -360,7 +360,8 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
     if (!weight || Number(weight) < 0) return "Weight is required.";
     // Dimensions are optional — a product can be saved without L × W × H.
     if (!seoTitle.trim()) return "SEO title is required.";
-    if (!seoDescription.trim()) return "SEO description is required.";
+    // SEO description is admin-only; brand reps don't provide it.
+    if (isAdmin && !seoDescription.trim()) return "SEO description is required.";
     return null;
   }
 
@@ -748,7 +749,10 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
           <section className="space-y-4">
             <h3 className={sectionTitle}>SEO</h3>
             <Field label="SEO Title" required><Input value={seoTitle} onChange={(e) => setSeoTitle(e.target.value)} placeholder="SEO optimized title" /></Field>
-            <Field label="SEO Description" required><Textarea rows={3} value={seoDescription} onChange={(e) => setSeoDescription(e.target.value)} placeholder="SEO optimized description" /></Field>
+            {/* SEO description is admin-only — brand reps just provide the title. */}
+            {isAdmin && (
+              <Field label="SEO Description" required><Textarea rows={3} value={seoDescription} onChange={(e) => setSeoDescription(e.target.value)} placeholder="SEO optimized description" /></Field>
+            )}
           </section>
         </div>
 

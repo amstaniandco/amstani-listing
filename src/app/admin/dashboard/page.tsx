@@ -106,6 +106,8 @@ export default async function AdminDashboardPage() {
         tariffPct: p.tariffPct,
         shippingCostOverride: p.shippingCostOverride,
         wholesalePrice: p.wholesalePrice,
+        // The rep's original PKR price, surfaced in the admin View dialog.
+        vendorPricePkr: p.vendorPricePkr,
       }))}
     />
   );

@@ -57,7 +57,19 @@ export function ProductView({ open, onOpenChange, product, showWholesalePrice = 
 
             {/* pricing */}
             <Section title="Pricing & Inventory">
-              {showWholesalePrice && <Row label="Wholesale Price" value={formatPkr(product.price)} />}
+              {showWholesalePrice && (
+                <>
+                  <Row label="Wholesale Price" value={formatPkr(product.price)} />
+                  {/* The ORIGINAL price the brand rep uploaded, in PKR. Preserved by
+                      vendorPricePkr (main_0012) and never altered by approval — purely
+                      informational, no effect on the final price. Legacy rows without
+                      vendorPricePkr fall back to the wholesale price. */}
+                  <Row
+                    label="Uploaded Price (Vendor)"
+                    value={formatPkr(product.vendorPricePkr ?? product.wholesalePrice ?? product.price)}
+                  />
+                </>
+              )}
               <Row label="Stock status" value={product.stockStatus.replace("_", " ")} />
               <Row label="Total stock" value={String(product.totalStock)} />
             </Section>

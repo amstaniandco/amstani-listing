@@ -43,9 +43,18 @@ interface ProductItem {
   sku: string;
   price: number;
   isPublished: boolean;
+  brandId: string;
   brandName: string | null;
   approvalStatus: ApprovalStatus;
   categoryIds: string[];
+}
+
+// Paging metadata for the server-paginated catalog (Products tab).
+interface ProductPageMeta {
+  page: number; // 1-based
+  pageSize: number;
+  total: number; // total matching the active filters, across all pages
+  totalPages: number;
 }
 
 // Full pending-product payload — extends EditProduct so it can be handed
@@ -92,21 +101,25 @@ export function AdminDashboardClient({
   shell,
   counts,
   categories,
+  brands,
   taxDefaults,
   initialUsdPerPkr,
   initialUsers,
   initialRequests,
   initialProducts,
+  initialProductPage,
   initialPendingProducts,
 }: {
   shell: ShellUser;
   counts: { products: number; brands: number; categories: number };
   categories: CategoryOption[];
+  brands: { id: string; name: string }[];
   taxDefaults: TaxDefaults;
   initialUsdPerPkr: number;
   initialUsers: UserItem[];
   initialRequests: RequestItem[];
   initialProducts: ProductItem[];
+  initialProductPage: ProductPageMeta;
   initialPendingProducts: PendingProductItem[];
 }) {
   const router = useRouter();
@@ -135,8 +148,12 @@ export function AdminDashboardClient({
   // Brand filter for the Product Approvals tab ("all" => no filter).
   const [pendingBrand, setPendingBrand] = useState("all");
   // Brand + category filters for the Products (catalog) tab ("all" => no filter).
-  const [catalogBrand, setCatalogBrand] = useState("all");
+  // These are now applied SERVER-SIDE (across all pages), keyed by id.
+  const [catalogBrandId, setCatalogBrandId] = useState("all");
   const [catalogCategory, setCatalogCategory] = useState("all");
+  // Server-paginated catalog page metadata + loading flag.
+  const [productPage, setProductPage] = useState<ProductPageMeta>(initialProductPage);
+  const [productsLoading, setProductsLoading] = useState(false);
 
   // Refresh the FX rate every 10 minutes while the dashboard is open.
   useEffect(() => {
@@ -168,30 +185,55 @@ export function AdminDashboardClient({
     [pendingProducts, pendingBrand],
   );
 
-  // Distinct brand names present in the loaded catalog, for the Products-tab filter.
+  // Filter dropdowns list ALL brands / categories (not just the current page),
+  // sorted by name — they drive server-side filtering.
   const catalogBrands = useMemo(
-    () =>
-      [...new Set(products.map((p) => p.brandName).filter((b): b is string => Boolean(b)))].sort(
-        (a, b) => a.localeCompare(b),
-      ),
-    [products],
+    () => [...brands].sort((a, b) => a.name.localeCompare(b.name)),
+    [brands],
   );
-  // Only categories that are actually used by a loaded product, sorted by name.
-  const catalogCategories = useMemo(() => {
-    const used = new Set(products.flatMap((p) => p.categoryIds));
-    return categories
-      .filter((c) => used.has(c.id))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [products, categories]);
-  const filteredProducts = useMemo(
-    () =>
-      products.filter(
-        (p) =>
-          (catalogBrand === "all" || p.brandName === catalogBrand) &&
-          (catalogCategory === "all" || p.categoryIds.includes(catalogCategory)),
-      ),
-    [products, catalogBrand, catalogCategory],
+  const catalogCategories = useMemo(
+    () => [...categories].sort((a, b) => a.name.localeCompare(b.name)),
+    [categories],
   );
+
+  // Fetch one catalog page from the server with the active filters. The brand /
+  // category filters are applied in the DB, so paging stays consistent with them.
+  async function fetchProductsPage(page: number, brandId: string, categoryId: string) {
+    setProductsLoading(true);
+    try {
+      const qs = new URLSearchParams({ page: String(page) });
+      if (brandId !== "all") qs.set("brand", brandId);
+      if (categoryId !== "all") qs.set("category", categoryId);
+      const res = await fetch(`/api/admin/products?${qs.toString()}`);
+      const data = await res.json().catch(() => null);
+      if (!data?.ok) {
+        toast.error(data?.message ?? "Could not load products.");
+        return;
+      }
+      setProducts(data.items as ProductItem[]);
+      setProductPage({
+        page: data.page,
+        pageSize: data.pageSize,
+        total: data.total,
+        totalPages: data.totalPages,
+      });
+    } finally {
+      setProductsLoading(false);
+    }
+  }
+
+  // Changing a filter resets to page 1 and refetches from the server.
+  function changeCatalogBrand(brandId: string) {
+    setCatalogBrandId(brandId);
+    fetchProductsPage(1, brandId, catalogCategory);
+  }
+  function changeCatalogCategory(categoryId: string) {
+    setCatalogCategory(categoryId);
+    fetchProductsPage(1, catalogBrandId, categoryId);
+  }
+  function goToPage(page: number) {
+    fetchProductsPage(page, catalogBrandId, catalogCategory);
+  }
 
   async function refreshPending() {
     const res = await fetch("/api/admin/products/pending");
@@ -310,8 +352,12 @@ export function AdminDashboardClient({
       toast.error(data.message ?? "Delete failed.");
       return;
     }
-    setProducts((prev) => prev.filter((p) => p.id !== id));
     toast.success("Product deleted.");
+    // A delete shifts the totals/pages, so refetch the current page. If that
+    // emptied the last page, step back one.
+    const target =
+      products.length === 1 && productPage.page > 1 ? productPage.page - 1 : productPage.page;
+    await fetchProductsPage(target, catalogBrandId, catalogCategory);
     router.refresh();
   }
 
@@ -581,82 +627,114 @@ export function AdminDashboardClient({
           <TabsContent value="products">
             <Card className="border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-slate-950/80">
               <CardContent className="p-0">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 p-4 dark:border-slate-800">
+                  <span className="text-sm text-slate-500">
+                    {(() => {
+                      const { page, pageSize, total } = productPage;
+                      if (total === 0) return "0 products";
+                      const first = (page - 1) * pageSize + 1;
+                      const last = Math.min(page * pageSize, total);
+                      return `Showing ${first.toLocaleString()}–${last.toLocaleString()} of ${total.toLocaleString()}`;
+                    })()}
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Label htmlFor="catalog-brand-filter" className="text-sm text-slate-500">Brand</Label>
+                    <Select value={catalogBrandId} onValueChange={changeCatalogBrand}>
+                      <SelectTrigger id="catalog-brand-filter" className="w-48">
+                        <SelectValue placeholder="All brands" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All brands</SelectItem>
+                        {catalogBrands.map((b) => (
+                          <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Label htmlFor="catalog-category-filter" className="text-sm text-slate-500">Category</Label>
+                    <Select value={catalogCategory} onValueChange={changeCatalogCategory}>
+                      <SelectTrigger id="catalog-category-filter" className="w-48">
+                        <SelectValue placeholder="All categories" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All categories</SelectItem>
+                        {catalogCategories.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
                 {products.length === 0 ? (
-                  <EmptyState title="No products" description="No products in the catalog." />
+                  <EmptyState
+                    title={catalogBrandId !== "all" || catalogCategory !== "all" ? "No matching products" : "No products"}
+                    description={
+                      catalogBrandId !== "all" || catalogCategory !== "all"
+                        ? "No products match the selected filters."
+                        : "No products in the catalog."
+                    }
+                  />
                 ) : (
                   <>
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 p-4 dark:border-slate-800">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Product</TableHead>
+                          <TableHead>Brand</TableHead>
+                          <TableHead>SKU</TableHead>
+                          <TableHead>Price</TableHead>
+                          <TableHead>Approval</TableHead>
+                          <TableHead>Listing</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {products.map((p) => (
+                          <TableRow key={p.id}>
+                            <TableCell className="font-medium">{p.name}</TableCell>
+                            <TableCell>{p.brandName ?? "—"}</TableCell>
+                            <TableCell>{p.sku}</TableCell>
+                            <TableCell>{formatCurrency(p.price)}</TableCell>
+                            <TableCell><Badge variant={approvalVariant[p.approvalStatus]}>{approvalLabel[p.approvalStatus]}</Badge></TableCell>
+                            {/* A product is only truly listed when it's both published AND approved —
+                                reject / request_changes force-unpublish on the server, so an
+                                unapproved row is never "Published" regardless of the stored flag. */}
+                            <TableCell>{(() => {
+                              const live = p.isPublished && p.approvalStatus === "APPROVED";
+                              return <Badge variant={live ? "success" : "secondary"}>{live ? "Published" : "Draft"}</Badge>;
+                            })()}</TableCell>
+                            <TableCell>
+                              <div className="flex justify-end">
+                                <Button size="sm" variant="outline" className="text-rose-600" onClick={() => deleteProduct(p.id)}>Delete</Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    {/* Pager: Prev / Next step through server-side pages of 100. */}
+                    <div className="flex items-center justify-between gap-3 border-t border-slate-200/80 p-4 dark:border-slate-800">
                       <span className="text-sm text-slate-500">
-                        {filteredProducts.length} {filteredProducts.length === 1 ? "product" : "products"}
-                        {products.length > filteredProducts.length ? ` of ${products.length}` : ""}
+                        Page {productPage.page.toLocaleString()} of {productPage.totalPages.toLocaleString()}
                       </span>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Label htmlFor="catalog-brand-filter" className="text-sm text-slate-500">Brand</Label>
-                        <Select value={catalogBrand} onValueChange={setCatalogBrand}>
-                          <SelectTrigger id="catalog-brand-filter" className="w-48">
-                            <SelectValue placeholder="All brands" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All brands</SelectItem>
-                            {catalogBrands.map((b) => (
-                              <SelectItem key={b} value={b}>{b}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Label htmlFor="catalog-category-filter" className="text-sm text-slate-500">Category</Label>
-                        <Select value={catalogCategory} onValueChange={setCatalogCategory}>
-                          <SelectTrigger id="catalog-category-filter" className="w-48">
-                            <SelectValue placeholder="All categories" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All categories</SelectItem>
-                            {catalogCategories.map((c) => (
-                              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={productsLoading || productPage.page <= 1}
+                          onClick={() => goToPage(productPage.page - 1)}
+                        >
+                          Previous
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={productsLoading || productPage.page >= productPage.totalPages}
+                          onClick={() => goToPage(productPage.page + 1)}
+                        >
+                          Next
+                        </Button>
                       </div>
                     </div>
-                    {filteredProducts.length === 0 ? (
-                      <EmptyState title="No matching products" description="No products match the selected filters." />
-                    ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Product</TableHead>
-                        <TableHead>Brand</TableHead>
-                        <TableHead>SKU</TableHead>
-                        <TableHead>Price</TableHead>
-                        <TableHead>Approval</TableHead>
-                        <TableHead>Listing</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredProducts.map((p) => (
-                        <TableRow key={p.id}>
-                          <TableCell className="font-medium">{p.name}</TableCell>
-                          <TableCell>{p.brandName ?? "—"}</TableCell>
-                          <TableCell>{p.sku}</TableCell>
-                          <TableCell>{formatCurrency(p.price)}</TableCell>
-                          <TableCell><Badge variant={approvalVariant[p.approvalStatus]}>{approvalLabel[p.approvalStatus]}</Badge></TableCell>
-                          {/* A product is only truly listed when it's both published AND approved —
-                              reject / request_changes force-unpublish on the server, so an
-                              unapproved row is never "Published" regardless of the stored flag. */}
-                          <TableCell>{(() => {
-                            const live = p.isPublished && p.approvalStatus === "APPROVED";
-                            return <Badge variant={live ? "success" : "secondary"}>{live ? "Published" : "Draft"}</Badge>;
-                          })()}</TableCell>
-                          <TableCell>
-                            <div className="flex justify-end">
-                              <Button size="sm" variant="outline" className="text-rose-600" onClick={() => deleteProduct(p.id)}>Delete</Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                    )}
                   </>
                 )}
               </CardContent>

@@ -197,23 +197,70 @@ export interface AdminProductItem extends ProductListItem {
   brandId: string;
 }
 
-export async function listAllProducts(limit = 200): Promise<AdminProductItem[]> {
+// Default products shown per admin catalog page.
+export const ADMIN_PRODUCTS_PAGE_SIZE = 100;
+
+export interface ProductPageParams {
+  page?: number; // 1-based; defaults to 1
+  pageSize?: number; // defaults to ADMIN_PRODUCTS_PAGE_SIZE
+  brandId?: string | null; // filter to one brand
+  categoryId?: string | null; // filter to one category (M:N via product_category)
+}
+
+export interface ProductPage {
+  items: AdminProductItem[];
+  total: number; // total matching the (optional) filters, across all pages
+  page: number; // 1-based page actually returned
+  pageSize: number;
+  totalPages: number;
+}
+
+// Server-side paginated admin catalog. The DB does the filtering, ordering, and
+// the exact count, so the UI only ever holds one page in memory — scales to any
+// catalog size. Brand/category filters are applied in the DB too (not just the
+// current page), so paging and filtering stay consistent.
+//
+// Category filtering uses an INNER join on product_category so only products that
+// actually belong to the category are returned (and counted).
+export async function listAllProductsPaged(params: ProductPageParams = {}): Promise<ProductPage> {
   const db = createAdminClient();
-  const { data, error } = await db
+
+  const pageSize = Math.max(1, params.pageSize ?? ADMIN_PRODUCTS_PAGE_SIZE);
+  const page = Math.max(1, Math.floor(params.page ?? 1));
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  // When filtering by category we must inner-join the join table so the row is
+  // only kept (and counted) when it has a matching product_category. Without a
+  // category filter we keep the join as a left join so products with no category
+  // still appear.
+  const categoryJoin = params.categoryId
+    ? "product_category!inner(categoryId,category(name))"
+    : "product_category(categoryId,category(name))";
+
+  let query = db
     .from("product")
     .select(
       "id,name,sku,price,isPublished,mainImage,createdAt,totalStock,approvalStatus,rejectReason,brandId," +
-        "brand(name),product_category(categoryId,category(name))",
+        "brand(name)," +
+        categoryJoin,
+      { count: "exact" },
     )
-    .order("createdAt", { ascending: false })
-    .limit(limit);
+    .order("createdAt", { ascending: false });
+
+  if (params.brandId) query = query.eq("brandId", params.brandId);
+  if (params.categoryId) query = query.eq("product_category.categoryId", params.categoryId);
+
+  const { data, error, count } = await query.range(from, to);
   if (error) throw new Error(error.message);
-  return (
+
+  const rows =
     (data as unknown as (ProductRow & {
       brand: { name: string } | null;
       product_category: { categoryId: string; category: { name: string } | null }[];
-    })[]) ?? []
-  ).map((p) => ({
+    })[]) ?? [];
+
+  const items: AdminProductItem[] = rows.map((p) => ({
     id: p.id,
     name: p.name,
     sku: p.sku,
@@ -229,6 +276,15 @@ export async function listAllProducts(limit = 200): Promise<AdminProductItem[]> 
     approvalStatus: p.approvalStatus ?? "APPROVED",
     rejectReason: p.rejectReason ?? null,
   }));
+
+  const total = count ?? items.length;
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
 }
 
 // ---- ADMIN: count + list of products awaiting approval ------------------

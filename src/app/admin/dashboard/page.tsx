@@ -2,11 +2,12 @@ import { redirect } from "next/navigation";
 
 import { getShellUser } from "@/lib/auth/shell-user";
 import { listBrandReps } from "@/lib/data/admin-users";
+import { listBrands } from "@/lib/auth/user";
 import { getUsdPerPkr } from "@/lib/data/currency";
 import { countBrands, countCategories, listCategories, listCategoryRequests } from "@/lib/data/categories";
 import {
   countAllProducts,
-  listAllProducts,
+  listAllProductsPaged,
   listPendingProductsForAdmin,
 } from "@/lib/data/products";
 import { getTaxSettings, listShippingRates } from "@/lib/data/tax";
@@ -17,13 +18,14 @@ export default async function AdminDashboardPage() {
   if (!ctx) redirect("/login");
   if (ctx.session.role !== "ADMIN") redirect("/login");
 
-  const [reps, requests, products, pendingProducts, categories, taxRates, shippingBrackets, totalProducts, totalBrands, totalCategories, fx] =
+  const [reps, requests, productsPage, pendingProducts, categories, brands, taxRates, shippingBrackets, totalProducts, totalBrands, totalCategories, fx] =
     await Promise.all([
       listBrandReps(),
       listCategoryRequests(),
-      listAllProducts(),
+      listAllProductsPaged({ page: 1 }), // first catalog page; the client pages the rest
       listPendingProductsForAdmin(),
       listCategories(),
+      listBrands(),
       getTaxSettings(),
       listShippingRates(),
       countAllProducts(),
@@ -43,6 +45,7 @@ export default async function AdminDashboardPage() {
       shell={ctx.shell}
       counts={{ products: totalProducts, brands: totalBrands, categories: totalCategories }}
       categories={categories.map((c) => ({ id: c.id, name: c.name }))}
+      brands={brands.map((b) => ({ id: b.id, name: b.name }))}
       taxDefaults={taxDefaults}
       initialUsdPerPkr={fx.usdPerPkr}
       initialUsers={reps.map((r) => ({
@@ -60,16 +63,23 @@ export default async function AdminDashboardPage() {
         brandName: r.brandName,
         createdAt: r.createdAt,
       }))}
-      initialProducts={products.map((p) => ({
+      initialProducts={productsPage.items.map((p) => ({
         id: p.id,
         name: p.name,
         sku: p.sku,
         price: p.price,
         isPublished: p.isPublished,
+        brandId: p.brandId,
         brandName: p.brandName,
         approvalStatus: p.approvalStatus,
         categoryIds: p.categoryIds,
       }))}
+      initialProductPage={{
+        page: productsPage.page,
+        pageSize: productsPage.pageSize,
+        total: productsPage.total,
+        totalPages: productsPage.totalPages,
+      }}
       initialPendingProducts={pendingProducts.map((p) => ({
         id: p.id,
         name: p.name,

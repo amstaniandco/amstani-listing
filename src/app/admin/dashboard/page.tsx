@@ -68,6 +68,7 @@ export default async function AdminDashboardPage() {
         isPublished: p.isPublished,
         brandName: p.brandName,
         approvalStatus: p.approvalStatus,
+        categoryIds: p.categoryIds,
       }))}
       initialPendingProducts={pendingProducts.map((p) => ({
         id: p.id,

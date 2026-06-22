@@ -202,13 +202,17 @@ export async function listAllProducts(limit = 200): Promise<AdminProductItem[]> 
   const { data, error } = await db
     .from("product")
     .select(
-      "id,name,sku,price,isPublished,mainImage,createdAt,totalStock,approvalStatus,rejectReason,brandId,brand(name)",
+      "id,name,sku,price,isPublished,mainImage,createdAt,totalStock,approvalStatus,rejectReason,brandId," +
+        "brand(name),product_category(categoryId,category(name))",
     )
     .order("createdAt", { ascending: false })
     .limit(limit);
   if (error) throw new Error(error.message);
   return (
-    (data as unknown as (ProductRow & { brand: { name: string } | null })[]) ?? []
+    (data as unknown as (ProductRow & {
+      brand: { name: string } | null;
+      product_category: { categoryId: string; category: { name: string } | null }[];
+    })[]) ?? []
   ).map((p) => ({
     id: p.id,
     name: p.name,
@@ -217,8 +221,8 @@ export async function listAllProducts(limit = 200): Promise<AdminProductItem[]> 
     isPublished: p.isPublished,
     mainImage: p.mainImage,
     createdAt: p.createdAt,
-    categoryIds: [],
-    categoryNames: [],
+    categoryIds: (p.product_category ?? []).map((c) => c.categoryId),
+    categoryNames: (p.product_category ?? []).map((c) => c.category?.name ?? "").filter(Boolean),
     totalStock: p.totalStock ?? 0,
     brandId: p.brandId,
     brandName: p.brand?.name ?? null,

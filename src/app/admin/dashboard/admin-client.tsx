@@ -45,6 +45,7 @@ interface ProductItem {
   isPublished: boolean;
   brandName: string | null;
   approvalStatus: ApprovalStatus;
+  categoryIds: string[];
 }
 
 // Full pending-product payload — extends EditProduct so it can be handed
@@ -133,6 +134,9 @@ export function AdminDashboardClient({
   const [usdPerPkr, setUsdPerPkr] = useState(initialUsdPerPkr);
   // Brand filter for the Product Approvals tab ("all" => no filter).
   const [pendingBrand, setPendingBrand] = useState("all");
+  // Brand + category filters for the Products (catalog) tab ("all" => no filter).
+  const [catalogBrand, setCatalogBrand] = useState("all");
+  const [catalogCategory, setCatalogCategory] = useState("all");
 
   // Refresh the FX rate every 10 minutes while the dashboard is open.
   useEffect(() => {
@@ -162,6 +166,31 @@ export function AdminDashboardClient({
         ? pendingProducts
         : pendingProducts.filter((p) => p.brandName === pendingBrand),
     [pendingProducts, pendingBrand],
+  );
+
+  // Distinct brand names present in the loaded catalog, for the Products-tab filter.
+  const catalogBrands = useMemo(
+    () =>
+      [...new Set(products.map((p) => p.brandName).filter((b): b is string => Boolean(b)))].sort(
+        (a, b) => a.localeCompare(b),
+      ),
+    [products],
+  );
+  // Only categories that are actually used by a loaded product, sorted by name.
+  const catalogCategories = useMemo(() => {
+    const used = new Set(products.flatMap((p) => p.categoryIds));
+    return categories
+      .filter((c) => used.has(c.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [products, categories]);
+  const filteredProducts = useMemo(
+    () =>
+      products.filter(
+        (p) =>
+          (catalogBrand === "all" || p.brandName === catalogBrand) &&
+          (catalogCategory === "all" || p.categoryIds.includes(catalogCategory)),
+      ),
+    [products, catalogBrand, catalogCategory],
   );
 
   async function refreshPending() {
@@ -203,9 +232,17 @@ export function AdminDashboardClient({
         return;
       }
       // Remove from the pending queue and reflect the new status in the catalog tab.
+      // Reject / request_changes force-unpublish on the server (see
+      // requestProductChanges / rejectProduct in lib/data/products.ts), so mirror
+      // that here — otherwise the "Listing" badge stays stale at "Published".
+      const unpublishes = action === "reject" || action === "request_changes";
       setPendingProducts((prev) => prev.filter((p) => p.id !== id));
       setProducts((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, approvalStatus: data.approvalStatus } : p)),
+        prev.map((p) =>
+          p.id === id
+            ? { ...p, approvalStatus: data.approvalStatus, isPublished: unpublishes ? false : p.isPublished }
+            : p,
+        ),
       );
       toast.success(
         action === "approve"
@@ -547,6 +584,42 @@ export function AdminDashboardClient({
                 {products.length === 0 ? (
                   <EmptyState title="No products" description="No products in the catalog." />
                 ) : (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 p-4 dark:border-slate-800">
+                      <span className="text-sm text-slate-500">
+                        {filteredProducts.length} {filteredProducts.length === 1 ? "product" : "products"}
+                        {products.length > filteredProducts.length ? ` of ${products.length}` : ""}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Label htmlFor="catalog-brand-filter" className="text-sm text-slate-500">Brand</Label>
+                        <Select value={catalogBrand} onValueChange={setCatalogBrand}>
+                          <SelectTrigger id="catalog-brand-filter" className="w-48">
+                            <SelectValue placeholder="All brands" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All brands</SelectItem>
+                            {catalogBrands.map((b) => (
+                              <SelectItem key={b} value={b}>{b}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Label htmlFor="catalog-category-filter" className="text-sm text-slate-500">Category</Label>
+                        <Select value={catalogCategory} onValueChange={setCatalogCategory}>
+                          <SelectTrigger id="catalog-category-filter" className="w-48">
+                            <SelectValue placeholder="All categories" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All categories</SelectItem>
+                            {catalogCategories.map((c) => (
+                              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    {filteredProducts.length === 0 ? (
+                      <EmptyState title="No matching products" description="No products match the selected filters." />
+                    ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -560,14 +633,20 @@ export function AdminDashboardClient({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {products.map((p) => (
+                      {filteredProducts.map((p) => (
                         <TableRow key={p.id}>
                           <TableCell className="font-medium">{p.name}</TableCell>
                           <TableCell>{p.brandName ?? "—"}</TableCell>
                           <TableCell>{p.sku}</TableCell>
                           <TableCell>{formatCurrency(p.price)}</TableCell>
                           <TableCell><Badge variant={approvalVariant[p.approvalStatus]}>{approvalLabel[p.approvalStatus]}</Badge></TableCell>
-                          <TableCell><Badge variant={p.isPublished ? "success" : "secondary"}>{p.isPublished ? "Published" : "Draft"}</Badge></TableCell>
+                          {/* A product is only truly listed when it's both published AND approved —
+                              reject / request_changes force-unpublish on the server, so an
+                              unapproved row is never "Published" regardless of the stored flag. */}
+                          <TableCell>{(() => {
+                            const live = p.isPublished && p.approvalStatus === "APPROVED";
+                            return <Badge variant={live ? "success" : "secondary"}>{live ? "Published" : "Draft"}</Badge>;
+                          })()}</TableCell>
                           <TableCell>
                             <div className="flex justify-end">
                               <Button size="sm" variant="outline" className="text-rose-600" onClick={() => deleteProduct(p.id)}>Delete</Button>
@@ -577,6 +656,8 @@ export function AdminDashboardClient({
                       ))}
                     </TableBody>
                   </Table>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>

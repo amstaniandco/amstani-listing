@@ -5,6 +5,15 @@ import { Badge } from "@/components/ui/badge";
 import { formatPkr } from "@/lib/format";
 import type { EditProduct } from "./product-form";
 
+// One labelled money row in the Pricing section (already-formatted string value,
+// e.g. "PKR 4,999"). Lets the caller pass an explicit, correctly-converted price
+// breakdown instead of relying on the default wholesale row.
+export interface PricingRow {
+  label: string;
+  value: string;
+  hint?: string; // optional small note shown under the label (e.g. "before tax")
+}
+
 interface ProductViewProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -12,9 +21,20 @@ interface ProductViewProps {
   // Wholesale price is admin-only context (used during pre-approval review).
   // Hidden from the brand rep's own product view by default.
   showWholesalePrice?: boolean;
+  // When provided, the Pricing section renders THESE rows (already converted /
+  // formatted by the caller) instead of the default wholesale row. Used by the
+  // admin catalog View, where an approved product's stored price is USD and must
+  // be shown back in PKR with the before/after-tax breakdown.
+  pricingRows?: PricingRow[];
 }
 
-export function ProductView({ open, onOpenChange, product, showWholesalePrice = false }: ProductViewProps) {
+export function ProductView({
+  open,
+  onOpenChange,
+  product,
+  showWholesalePrice = false,
+  pricingRows,
+}: ProductViewProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[95vh] w-full max-w-3xl overflow-y-auto">
@@ -57,18 +77,37 @@ export function ProductView({ open, onOpenChange, product, showWholesalePrice = 
 
             {/* pricing */}
             <Section title="Pricing & Inventory">
-              {showWholesalePrice && (
-                <>
-                  <Row label="Wholesale Price" value={formatPkr(product.price)} />
-                  {/* The ORIGINAL price the brand rep uploaded, in PKR. Preserved by
-                      vendorPricePkr (main_0012) and never altered by approval — purely
-                      informational, no effect on the final price. Legacy rows without
-                      vendorPricePkr fall back to the wholesale price. */}
-                  <Row
-                    label="Uploaded Price (Vendor)"
-                    value={formatPkr(product.vendorPricePkr ?? product.wholesalePrice ?? product.price)}
-                  />
-                </>
+              {/* Caller-supplied breakdown wins (admin catalog View: converts an
+                  approved product's USD price back to PKR with before/after-tax
+                  rows). Otherwise fall back to the simple pre-approval wholesale
+                  rows, where the stored price is still the rep's PKR amount. */}
+              {pricingRows && pricingRows.length > 0 ? (
+                pricingRows.map((r) =>
+                  r.hint ? (
+                    <Row key={r.label} label={r.label}>
+                      <span className="block text-right">
+                        <span className="font-medium">{r.value}</span>
+                        <span className="block text-xs font-normal text-slate-400">{r.hint}</span>
+                      </span>
+                    </Row>
+                  ) : (
+                    <Row key={r.label} label={r.label} value={r.value} />
+                  ),
+                )
+              ) : (
+                showWholesalePrice && (
+                  <>
+                    <Row label="Wholesale Price" value={formatPkr(product.price)} />
+                    {/* The ORIGINAL price the brand rep uploaded, in PKR. Preserved by
+                        vendorPricePkr (main_0012) and never altered by approval — purely
+                        informational, no effect on the final price. Legacy rows without
+                        vendorPricePkr fall back to the wholesale price. */}
+                    <Row
+                      label="Uploaded Price (Vendor)"
+                      value={formatPkr(product.vendorPricePkr ?? product.wholesalePrice ?? product.price)}
+                    />
+                  </>
+                )
               )}
               <Row label="Stock status" value={product.stockStatus.replace("_", " ")} />
               <Row label="Total stock" value={String(product.totalStock)} />

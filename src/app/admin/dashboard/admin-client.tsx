@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatDate, formatPkr } from "@/lib/format";
-import { ProductView } from "@/features/products/components/product-view";
+import { ProductView, type PricingRow } from "@/features/products/components/product-view";
 import { ProductForm, type CategoryOption, type EditProduct, type TaxDefaults } from "@/features/products/components/product-form";
 import type { ApprovalStatus } from "@/types/db";
 
@@ -129,6 +129,12 @@ export function AdminDashboardClient({
   const [pendingProducts, setPendingProducts] = useState(initialPendingProducts);
   const [viewing, setViewing] = useState<PendingProductItem | null>(null);
   const [viewOpen, setViewOpen] = useState(false);
+  // Catalog (Products tab) View: full detail fetched on demand + PKR price rows.
+  // brandName / categoryNames come from getFullProductAsAdmin at runtime.
+  type CatalogViewProduct = EditProduct & { brandName?: string | null; categoryNames?: string[] };
+  const [catalogViewing, setCatalogViewing] = useState<CatalogViewProduct | null>(null);
+  const [catalogViewOpen, setCatalogViewOpen] = useState(false);
+  const [catalogViewRows, setCatalogViewRows] = useState<PricingRow[]>([]);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
   const [approveItem, setApproveItem] = useState<PendingProductItem | null>(null);
@@ -359,6 +365,78 @@ export function AdminDashboardClient({
       products.length === 1 && productPage.page > 1 ? productPage.page - 1 : productPage.page;
     await fetchProductsPage(target, catalogBrandId, catalogCategory);
     router.refresh();
+  }
+
+  // ---- Catalog (Products tab) View ----------------------------------------
+  // Open the full read-only detail for ANY catalog product. The list shape is
+  // lightweight, so fetch the full payload on demand (same endpoint the editor
+  // uses), then build the PKR price breakdown and open <ProductView>.
+  async function openCatalogView(id: string) {
+    setBusyId(id);
+    try {
+      const res = await fetch(`/api/admin/products/${id}`);
+      const data = await res.json().catch(() => null);
+      if (!data?.ok) {
+        toast.error(data?.message ?? "Could not load product.");
+        return;
+      }
+      const full = data.product as CatalogViewProduct;
+      // The catalog row already knows the approval status; use it to interpret
+      // the stored price (PKR for not-yet-approved, USD for approved).
+      const listRow = products.find((p) => p.id === id);
+      setCatalogViewRows(buildCatalogPricingRows(full, listRow?.approvalStatus ?? "APPROVED"));
+      setCatalogViewing(full);
+      setCatalogViewOpen(true);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Build the PKR price breakdown for the catalog View, shown the same way as the
+  // pre-approval review: vendor's original PKR, the wholesale base (before tax),
+  // and the final (after tax). EVERYTHING is computed through the USD pipeline
+  // (the server's source of truth) and converted back to PKR with the live rate,
+  // so a NOT-yet-approved product (stored PKR) and an APPROVED product (stored
+  // USD) render identically — and the PKR figures are real, never hardcoded.
+  function buildCatalogPricingRows(p: EditProduct, status: ApprovalStatus): PricingRow[] {
+    const approved = status === "APPROVED";
+    const pkrPerUsd = usdPerPkr > 0 ? 1 / usdPerPkr : 0;
+
+    // Wholesale base, in USD. Approved rows already hold a USD base; others hold
+    // the rep's PKR base, which we convert with the live rate.
+    const wholesaleUsd = approved
+      ? p.wholesalePrice ?? p.price
+      : (p.wholesalePrice ?? p.price) * usdPerPkr;
+
+    // Final (after-tax) USD. Approved rows already hold it; otherwise apply the
+    // same tax + shipping math the server uses on approve.
+    let finalUsd: number;
+    if (approved) {
+      finalUsd = p.price;
+    } else {
+      const profit = p.profitPct ?? taxDefaults.profitPct;
+      const tariff = p.tariffPct ?? taxDefaults.tariffPct;
+      const weight = p.shipping?.weight ?? 0;
+      let shippingUsd = p.shippingCostOverride ?? 0;
+      if (p.shippingCostOverride == null) {
+        const b = taxDefaults.shippingBrackets.find(
+          (br) => weight >= br.minKg && (br.maxKg == null || weight <= br.maxKg),
+        );
+        const rate = b ? b.ratePerKg : taxDefaults.shippingPerKg;
+        shippingUsd = Math.round(weight * rate * 100) / 100;
+      }
+      finalUsd = wholesaleUsd * (1 + (profit + tariff) / 100) + shippingUsd;
+    }
+
+    // The rep's ORIGINAL PKR price — preserved verbatim and never touched by
+    // approval. Legacy rows without it fall back to the converted wholesale base.
+    const vendorPkr = p.vendorPricePkr ?? Math.round(wholesaleUsd * pkrPerUsd);
+
+    return [
+      { label: "Uploaded Price (Vendor)", value: formatPkr(vendorPkr) },
+      { label: "Wholesale Price", value: formatPkr(wholesaleUsd * pkrPerUsd), hint: "before tax" },
+      { label: "Final Price", value: formatPkr(finalUsd * pkrPerUsd), hint: "after tax & shipping" },
+    ];
   }
 
   // The rep's wholesale base is in PKR; convert to USD with the live rate.
@@ -703,7 +781,8 @@ export function AdminDashboardClient({
                               return <Badge variant={live ? "success" : "secondary"}>{live ? "Published" : "Draft"}</Badge>;
                             })()}</TableCell>
                             <TableCell>
-                              <div className="flex justify-end">
+                              <div className="flex justify-end gap-2">
+                                <Button size="sm" variant="outline" disabled={busyId === p.id} onClick={() => openCatalogView(p.id)}>View</Button>
                                 <Button size="sm" variant="outline" className="text-rose-600" onClick={() => deleteProduct(p.id)}>Delete</Button>
                               </div>
                             </TableCell>
@@ -745,6 +824,16 @@ export function AdminDashboardClient({
 
       {/* Full pre-approval product review (read-only). Admin sees wholesale price. */}
       <ProductView open={viewOpen} onOpenChange={setViewOpen} product={viewing} showWholesalePrice />
+
+      {/* Catalog (Products tab) View — same complete detail as the approval view,
+          with the price breakdown shown in PKR (converted from the stored USD for
+          approved products). */}
+      <ProductView
+        open={catalogViewOpen}
+        onOpenChange={setCatalogViewOpen}
+        product={catalogViewing}
+        pricingRows={catalogViewRows}
+      />
 
       {/* Admin product editor — edits any field (incl. price) before approval. */}
       <ProductForm

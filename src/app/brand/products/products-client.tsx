@@ -220,9 +220,17 @@ export function BrandProductsClient({
                         ) : null}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={p.isPublished ? "success" : "secondary"}>
-                          {p.isPublished ? "Published" : "Disabled"}
-                        </Badge>
+                        {/* A product is only truly listed when it's published AND approved.
+                            Reject / request_changes force-unpublish on the server, so an
+                            unapproved row is never "Published" regardless of the stored flag. */}
+                        {(() => {
+                          const live = p.isPublished && p.approvalStatus === "APPROVED";
+                          return (
+                            <Badge variant={live ? "success" : "secondary"}>
+                              {live ? "Published" : "Disabled"}
+                            </Badge>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap justify-end gap-2">
@@ -232,19 +240,28 @@ export function BrandProductsClient({
                           <Button variant="outline" size="sm" disabled={busyId === p.id} onClick={() => openEdit(p.id)}>
                             <Pencil className="mr-2 h-4 w-4" /> {p.approvalStatus === "REJECTED" || p.approvalStatus === "CHANGES_REQUESTED" ? "Edit & resubmit" : "Edit"}
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={!p.isPublished && p.approvalStatus !== "APPROVED"}
-                            title={!p.isPublished && p.approvalStatus !== "APPROVED" ? "Awaiting admin approval" : undefined}
-                            onClick={() => togglePublish(p.id, !p.isPublished)}
-                          >
-                            {p.isPublished ? (
-                              <><EyeOff className="mr-2 h-4 w-4" /> Disable</>
-                            ) : (
-                              <><Eye className="mr-2 h-4 w-4" /> Enable</>
-                            )}
-                          </Button>
+                          {(() => {
+                            // Only an APPROVED product can be toggled live; reject /
+                            // request_changes force-unpublish on the server, so treat an
+                            // unapproved product as not-live even if its flag is stale.
+                            const live = p.isPublished && p.approvalStatus === "APPROVED";
+                            const canToggle = p.approvalStatus === "APPROVED";
+                            return (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={!canToggle}
+                                title={!canToggle ? "Awaiting admin approval" : undefined}
+                                onClick={() => togglePublish(p.id, !live)}
+                              >
+                                {live ? (
+                                  <><EyeOff className="mr-2 h-4 w-4" /> Disable</>
+                                ) : (
+                                  <><Eye className="mr-2 h-4 w-4" /> Enable</>
+                                )}
+                              </Button>
+                            );
+                          })()}
                           <Button variant="outline" size="sm" className="text-rose-600" onClick={() => setDeleteId(p.id)}>
                             <Trash2 className="mr-2 h-4 w-4" /> Delete
                           </Button>

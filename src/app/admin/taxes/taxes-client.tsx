@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Lock, Percent, Plus, Save, Trash2 } from "lucide-react";
+import { Lock, Percent, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DashboardShell, type NavItem, type ShellUser } from "@/components/shared/dashboard-shell";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -86,6 +87,11 @@ export function TaxSettingsClient({
   );
   const [savingRates, setSavingRates] = useState(false);
 
+  // Recompute: re-applies the saved rates to already-approved products' final
+  // price (so products approved before a rate change pick up the new shipping).
+  const [recomputeOpen, setRecomputeOpen] = useState(false);
+  const [recomputing, setRecomputing] = useState(false);
+
   const p = Number(profit) || 0;
   const t = Number(tariff) || 0;
   const gKg = Number(perKg) || 0;
@@ -149,6 +155,24 @@ export function TaxSettingsClient({
       router.refresh();
     } finally {
       setSavingRates(false);
+    }
+  }
+
+  async function recompute() {
+    setRecomputing(true);
+    try {
+      const res = await fetch("/api/admin/products/recompute", { method: "POST" });
+      const data = await res.json();
+      if (!data.ok) { toast.error(data.message ?? "Could not recompute prices."); return; }
+      toast.success(
+        data.updated === 0
+          ? "All approved products were already up to date."
+          : `Recomputed ${data.updated} product${data.updated === 1 ? "" : "s"}` +
+              (data.unchanged ? ` · ${data.unchanged} already up to date.` : "."),
+      );
+      router.refresh();
+    } finally {
+      setRecomputing(false);
     }
   }
 
@@ -270,6 +294,26 @@ export function TaxSettingsClient({
               </div>
             </CardContent>
           </Card>
+
+          {/* RECOMPUTE EXISTING APPROVED PRODUCTS */}
+          <Card className="border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-slate-950/80">
+            <CardHeader>
+              <CardTitle>Apply to existing products</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Changing the rates above only affects products approved afterwards. Run this to
+                re-apply the current shipping &amp; tax settings to the price of products that were
+                <strong> already approved</strong> — useful right after adding shipping rates.
+                It only updates prices; it never changes a product&apos;s approval status or whether
+                it&apos;s listed, and it leaves pending products untouched.
+              </p>
+              <Button variant="outline" onClick={() => setRecomputeOpen(true)} disabled={recomputing}>
+                <RefreshCw className={`mr-2 h-4 w-4${recomputing ? " animate-spin" : ""}`} />
+                {recomputing ? "Recomputing…" : "Recompute approved product prices"}
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         {/* PREVIEW */}
@@ -290,6 +334,19 @@ export function TaxSettingsClient({
           </CardContent>
         </Card>
       </div>
+
+      {/* Recompute confirmation — changes live prices on already-approved products. */}
+      <ConfirmDialog
+        open={recomputeOpen}
+        onOpenChange={(open) => !open && setRecomputeOpen(false)}
+        title="Recompute approved product prices?"
+        description="This re-applies the current shipping & tax settings to the final price of every already-approved product. Approval status, listing state, and pending products are not affected. Make sure your rates above are saved first."
+        confirmLabel="Recompute prices"
+        onConfirm={() => {
+          setRecomputeOpen(false);
+          recompute();
+        }}
+      />
     </DashboardShell>
   );
 }

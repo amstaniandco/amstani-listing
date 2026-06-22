@@ -329,6 +329,70 @@ export async function approveProduct(productId: string, reviewerId: string): Pro
   if (error) throw new Error(error.message);
 }
 
+// ---- ADMIN: recompute already-approved prices ----------------------------
+// Re-applies the CURRENT tax rates + shipping to every APPROVED product, so a
+// later change to the global shipping/tax settings (e.g. adding per-kg rates)
+// flows into products that were approved before the change.
+//
+// FX-SAFE: an approved product's wholesalePrice is ALREADY in USD (locked in at
+// approval — see approveProduct), so we do NOT convert PKR -> USD again here.
+// We only recompute the after-tax `price` from that USD base.
+//
+// Scope is deliberately narrow:
+//   - touches ONLY rows with approvalStatus === "APPROVED"
+//     (PENDING / REJECTED / CHANGES_REQUESTED are left untouched, so nothing
+//      moves between the approval queues)
+//   - writes ONLY `price` — approvalStatus, isPublished, wholesalePrice, and all
+//     review metadata are preserved exactly as they were.
+// Returns how many rows were updated vs. left unchanged.
+export async function recomputeApprovedPrices(): Promise<{ updated: number; unchanged: number }> {
+  const db = createAdminClient();
+  const now = new Date().toISOString();
+
+  const { data, error } = await db
+    .from("product")
+    .select("id,price,wholesalePrice,profitPct,tariffPct,shippingCostOverride,shipping_info(weight)")
+    .eq("approvalStatus", "APPROVED");
+  if (error) throw new Error(error.message);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = (data as any[]) ?? [];
+
+  // Global rates + brackets are the same for every product; fetch once.
+  const [global, brackets] = await Promise.all([getTaxSettings(), listShippingRates()]);
+
+  let updated = 0;
+  let unchanged = 0;
+  for (const p of rows) {
+    // Base is already USD for approved products (locked at approval). If it's
+    // somehow null, skip rather than guess — never re-convert from PKR here.
+    const wholesaleUsd = p.wholesalePrice;
+    if (wholesaleUsd == null) {
+      unchanged++;
+      continue;
+    }
+    const weight = Array.isArray(p.shipping_info)
+      ? p.shipping_info[0]?.weight ?? null
+      : p.shipping_info?.weight ?? null;
+    const rates = resolveRates(global, { profitPct: p.profitPct, tariffPct: p.tariffPct });
+    const shippingCost = resolveShippingCost(weight, global.shippingPerKg, brackets, p.shippingCostOverride);
+    const finalPrice = computeFinalPrice(wholesaleUsd, rates, shippingCost);
+
+    // Skip the write if nothing changed (cheaper, and keeps updatedAt honest).
+    if (finalPrice === Number(p.price)) {
+      unchanged++;
+      continue;
+    }
+    const { error: uErr } = await db
+      .from("product")
+      .update({ price: finalPrice, updatedAt: now } as never)
+      .eq("id", p.id)
+      .eq("approvalStatus", "APPROVED"); // belt-and-suspenders: never touch a non-approved row
+    if (uErr) throw new Error(uErr.message);
+    updated++;
+  }
+  return { updated, unchanged };
+}
+
 // Rejecting also force-unpublishes, so a rejected product can never be live.
 export async function rejectProduct(
   productId: string,

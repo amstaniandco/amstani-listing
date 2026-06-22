@@ -608,12 +608,11 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
           <section className="space-y-4">
             <div className="flex items-center justify-between border-b pb-2">
               <h3 className="text-lg font-semibold">Variants</h3>
-              <div className="flex gap-2">
-                <Button type="button" size="sm" variant="outline" onClick={() => setShowVariantVariables((s) => !s)}>
-                  {showVariantVariables ? "Hide Variables" : "Manage Variables"}
-                </Button>
-                <Button type="button" size="sm" onClick={addVariant}><Plus className="mr-1 h-4 w-4" /> Add Variant</Button>
-              </div>
+              {/* "Add Variant" lives at the BOTTOM of the list (below) so you can add
+                  another right after filling one in, without scrolling back up. */}
+              <Button type="button" size="sm" variant="outline" onClick={() => setShowVariantVariables((s) => !s)}>
+                {showVariantVariables ? "Hide Variables" : "Manage Variables"}
+              </Button>
             </div>
 
             {showVariantVariables && (
@@ -707,6 +706,11 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
                 </div>
               ))}
             </div>
+
+            {/* Add another variant from the bottom of the list — no scrolling up. */}
+            <Button type="button" variant="outline" className="w-full" onClick={addVariant}>
+              <Plus className="mr-1 h-4 w-4" /> Add Variant
+            </Button>
           </section>
 
           {/* SIZE CHART */}

@@ -432,9 +432,9 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
     // Size chart is optional — a product can be saved without any size rows.
     if (!weight || Number(weight) < 0) return "Weight is required.";
     // Dimensions are optional — a product can be saved without L × W × H.
-    if (!seoTitle.trim()) return "SEO title is required.";
-    // SEO description is admin-only; brand reps don't provide it.
-    if (isAdmin && !seoDescription.trim()) return "SEO description is required.";
+    // SEO is optional for admins (they can fine-tune it later); brand reps still
+    // must provide an SEO title. SEO description stays admin-only and optional.
+    if (!isAdmin && !seoTitle.trim()) return "SEO title is required.";
     return null;
   }
 
@@ -825,11 +825,14 @@ export function ProductForm({ open, onOpenChange, categories, product, onSaved, 
 
           {/* SEO */}
           <section className="space-y-4">
-            <h3 className={sectionTitle}>SEO</h3>
-            <Field label="SEO Title" required><Input value={seoTitle} onChange={(e) => setSeoTitle(e.target.value)} placeholder="SEO optimized title" /></Field>
-            {/* SEO description is admin-only — brand reps just provide the title. */}
+            <h3 className={sectionTitle}>
+              SEO {isAdmin && <span className="text-sm font-normal text-slate-400">— optional</span>}
+            </h3>
+            {/* SEO title is required for brand reps but optional for admins. */}
+            <Field label="SEO Title" required={!isAdmin}><Input value={seoTitle} onChange={(e) => setSeoTitle(e.target.value)} placeholder="SEO optimized title" /></Field>
+            {/* SEO description is admin-only and optional. */}
             {isAdmin && (
-              <Field label="SEO Description" required><Textarea rows={3} value={seoDescription} onChange={(e) => setSeoDescription(e.target.value)} placeholder="SEO optimized description" /></Field>
+              <Field label="SEO Description"><Textarea rows={3} value={seoDescription} onChange={(e) => setSeoDescription(e.target.value)} placeholder="SEO optimized description" /></Field>
             )}
           </section>
         </div>

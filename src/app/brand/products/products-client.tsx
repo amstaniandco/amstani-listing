@@ -11,6 +11,15 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ProductForm, type CategoryOption, type EditProduct } from "@/features/products/components/product-form";
@@ -73,6 +82,7 @@ export function BrandProductsClient({
   const [viewOpen, setViewOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [changesFor, setChangesFor] = useState<ProductListItem | null>(null);
 
   const filtered = products.filter((p) =>
     `${p.name} ${p.sku}`.toLowerCase().includes(search.toLowerCase()),
@@ -211,12 +221,16 @@ export function BrandProductsClient({
                           {approvalLabel[p.approvalStatus]}
                         </Badge>
                         {(p.approvalStatus === "REJECTED" || p.approvalStatus === "CHANGES_REQUESTED") && p.rejectReason ? (
-                          <p
-                            className={`mt-1 max-w-[14rem] text-xs ${p.approvalStatus === "REJECTED" ? "text-rose-600" : "text-amber-600"}`}
-                            title={p.rejectReason}
-                          >
-                            {p.rejectReason}
-                          </p>
+                          <div className="mt-1 max-w-[14rem]">
+                            {/* The full note is shown in the dialog — no inline preview. */}
+                            <Button
+                              variant="ghost"
+                              className={`h-auto bg-transparent px-0 py-0 text-xs font-medium underline underline-offset-2 hover:bg-transparent ${p.approvalStatus === "REJECTED" ? "text-rose-600 hover:text-rose-700" : "text-amber-600 hover:text-amber-700"}`}
+                              onClick={() => setChangesFor(p)}
+                            >
+                              Show changes description
+                            </Button>
+                          </div>
                         ) : null}
                       </TableCell>
                       <TableCell>
@@ -296,6 +310,29 @@ export function BrandProductsClient({
         confirmLabel="Delete"
         onConfirm={confirmDelete}
       />
+
+      <Dialog open={Boolean(changesFor)} onOpenChange={(open) => !open && setChangesFor(null)}>
+        <DialogContent className="w-[min(92vw,32rem)]">
+          <DialogHeader>
+            <DialogTitle>
+              {changesFor?.approvalStatus === "REJECTED" ? "Rejection reason" : "Changes requested"}
+            </DialogTitle>
+            <DialogDescription>
+              {changesFor
+                ? `Sent by the admin for ${changesFor.name}${changesFor.sku ? ` (${changesFor.sku})` : ""}.`
+                : null}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words text-sm text-slate-700 dark:text-slate-200">
+            {changesFor?.rejectReason}
+          </p>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Close</Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardShell>
   );
 }
